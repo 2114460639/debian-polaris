@@ -53,19 +53,33 @@ debian-polaris/
 
 ## 镜像从哪来
 
-仓库里**不放镜像文件**（GitHub 单文件上限 100 MB），成品镜像统一发在
-[Releases](https://github.com/2114460639/debian-polaris/releases)：
+仓库里**只放方法**（脚本、文档、补丁、配置），镜像和第三方二进制统一发在
+[Release v1.0](https://github.com/2114460639/debian-polaris/releases/tag/v1.0)：
 
-| 文件 | 大小 | 说明 |
+| 资产 | 大小 | 说明 |
 | --- | --- | --- |
-| `boot.img` | 25 MiB | 内核 + DTB + initramfs，刷到 `boot` 分区 |
-| `xiaomi-polaris.img` | 1.2 GiB | 系统镜像（**Android sparse 格式**），刷到 `userdata` |
-| `*.md5` | — | 校验值，下载后先 `md5sum -c` |
+| `debian-polaris-flash-console.7z` | 304 MiB | **完整刷机包**（原始 1.2 GiB，7z LZMA2 压到 24%）|
+| `debian-polaris-flash-console.7z.sha256` | 98 B | 校验值 |
 
-把它们放进本仓库的 `images/` 目录，`flash.sh` / `flash.bat` 就能直接用。
+7z 里包含全部刷机所需：
 
-`tools/`（adb、fastboot）和 `drivers/`（Windows USB 驱动）是第三方二进制，
-**同样不入库**，需要自行准备：
+- `images/boot.img`（25 MiB）、`images/xiaomi-polaris.img`（1.2 GiB，**Android sparse 格式**）、`images/*.md5`
+- `flash.sh` / `flash.bat`
+- `tools/`（adb、fastboot）、`drivers/`（Windows USB 驱动）
+- `kernel/` `rootfs/` `scripts/` `fbkeyboard/`（与仓库同源的适配方法）
+
+```bash
+sha256sum -c debian-polaris-flash-console.7z.sha256
+7z x debian-polaris-flash-console.7z
+cd debian-polaris-flash-console && ./flash.sh     # 输入 yes
+```
+
+> 为什么压成 7z：GitHub 单文件上限 100 MB，1.2 GiB 的镜像没法直接放仓库；
+> 打成一个 7z 既绕开限制，又只有原来的 24%，慢速网络也传得动。
+> 解压后的 `images/*.md5` 可以直接 `md5sum -c` 再校验一遍。
+
+`tools/`、`drivers/` 是第三方二进制（**二进制 + 第三方许可证**），不进 git。
+如果你是 `git clone` 拿的仓库（没下载 Release），需要自行准备：
 
 - Linux：`sudo apt install android-tools-adb android-tools-fastboot`
 - Windows：下载 [platform-tools](https://developer.android.com/tools/releases/platform-tools)
