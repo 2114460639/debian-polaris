@@ -1,0 +1,16 @@
+[Unit]
+Description=Create pmOS-compatible g1 USB gadget (NCM network)
+Documentation=file:///usr/sbin/polaris-usb-gadget
+# configfs 与 UDC 在内核起来后即可用；不需要等网络栈。
+After=sysinit.target
+Before=polaris-adbd.service
+# 早于 networkd 建好 usb0，networkd 启动时就能按 10-usb0.network 配地址
+Before=systemd-networkd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/polaris-usb-gadget
+
+[Install]
+WantedBy=multi-user.target

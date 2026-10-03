@@ -1,0 +1,17 @@
+[Unit]
+Description=Generate SSH host keys on first boot (polaris)
+# 不依赖 ConditionFirstBoot=yes：systemd PID 1 启动时会先把空的 /etc/machine-id
+# 填上，导致 first-boot 条件恒为假，Debian 自带的 sshd-keygen.service 会被跳过，
+# 结果是 sshd 永远没有 host key、ssh.service 反复失败。
+# 这里改用 host key 文件是否存在来判断，首次开机必定生成，之后自动跳过。
+ConditionPathExists=!/etc/ssh/ssh_host_ed25519_key
+Before=ssh.service sshd.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/ssh-keygen -A
+
+[Install]
+WantedBy=multi-user.target

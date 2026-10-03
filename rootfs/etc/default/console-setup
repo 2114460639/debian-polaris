@@ -1,0 +1,8 @@
+ACTIVE_CONSOLES="/dev/tty[1-6]"
+CHARMAP="UTF-8"
+CODESET="guess"
+# 大号控制台字体：1080x2160 屏上默认 8x16 太小，改用 Terminus 16x32（正好 2 倍）。
+# CHARMAP=UTF-8 -> CODESET=Uni2，故最终加载 /usr/share/consolefonts/Uni2-Terminus32x16.psf.gz
+# （文件名是「宽x高」，即 16 宽 x 32 高）。
+FONTFACE="Terminus"
+FONTSIZE="16x32"

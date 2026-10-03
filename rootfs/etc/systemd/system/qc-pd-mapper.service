@@ -1,0 +1,12 @@
+[Unit]
+Description=Qualcomm PD mapper service (TZ PIL 映射)
+Before=polaris-modem.service
+
+[Service]
+Environment=LD_LIBRARY_PATH=/usr/lib/qc-mesh
+ExecStart=/usr/lib/qc-mesh/pd-mapper
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

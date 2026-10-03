@@ -1,0 +1,11 @@
+#
+# Configure the MAC addresses of the Bluetooth interfaces when they appear.
+# Copyright (c) Dylan Van Assche (2022)
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# If systemd is available, use unit activation
+ACTION=="add", SUBSYSTEM=="bluetooth", KERNEL=="hci0", TEST=="/run/systemd/system", TAG+="systemd", ENV{SYSTEMD_WANTS}="bootmac@bluetooth.service"
+
+# Otherwise, run directly
+ACTION=="add", SUBSYSTEM=="bluetooth", KERNEL=="hci0", TEST!="/run/systemd/system", RUN+="/usr/bin/bootmac --bluetooth"

@@ -1,0 +1,33 @@
+#!/bin/sh
+# 启动基带处理器（MPSS）。
+#
+# ath10k(WCN3990) 的 WiFi 初始化依赖 QMI WLFW 服务(0x45)，该服务由基带提供：
+# 基带起来后会通过 tqftpserv 拉取 wlanmdsp.mbn，随后才注册 WLFW，
+# ath10k 收到 server-arrive 才会加载固件并注册 wlan0。
+RP=/sys/class/remoteproc/remoteproc2/state
+
+# 等待 QRTR TFTP 就绪（基带要靠它取 wlanmdsp.mbn / mcfg）
+i=0
+while [ $i -lt 30 ]; do
+    if pgrep -x tqftpserv >/dev/null 2>&1; then
+        break
+    fi
+    i=$((i + 1))
+    sleep 1
+done
+sleep 2
+
+i=0
+while [ $i -lt 30 ]; do
+    state=$(cat "$RP" 2>/dev/null)
+    if [ "$state" = "running" ]; then
+        exit 0
+    fi
+    if echo start > "$RP" 2>/dev/null; then
+        exit 0
+    fi
+    i=$((i + 1))
+    sleep 1
+done
+echo "polaris-modem-start: 无法启动基带处理器" >&2
+exit 1

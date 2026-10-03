@@ -1,0 +1,110 @@
+# Co-Maintainer: Joel Selvaraj <foss@joelselvaraj.com>
+# Stable Linux kernel with patches for SDM845 devices
+# Kernel config based on: arch/arm64/configs/defconfig and sdm845.config
+maintainer="Casey Connolly <kcxt@postmarketos.org>"
+_flavor="postmarketos-qcom-sdm845"
+pkgname=linux-$_flavor
+pkgver=7.1_rc1
+pkgrel=53
+pkgdesc="Mainline Kernel fork for SDM845 devices"
+arch="aarch64"
+_carch="arm64"
+url="https://gitlab.com/sdm845-mainline/linux"
+license="GPL-2.0-only"
+options="!check !tracedeps
+	pmb:cross-native
+	pmb:kconfigcheck-community"
+makedepends="
+	bison
+	clang
+	findutils
+	flex
+	installkernel
+	lld
+	llvm
+	openssl-dev
+	perl
+	python3
+	zstd
+"
+
+_tag="sdm845-7.1-rc1-r0"
+_defconfig="defconfig"
+
+# Source
+source="
+	linux-$_tag.tar.gz::https://gitlab.com/sdm845-mainline/linux/-/archive/$_tag/linux-$_tag.tar.gz
+	config-postmarketos-qcom-sdm845.aarch64
+	nt35596s-prepare-prev-first.patch
+	polaris-battery-fg.patch
+	polaris-wifi-vht.patch
+	polaris-wifi-host-cap-skip-quirk.patch
+	polaris-firmware-path.patch
+	polaris-camera-disabled.patch
+	polaris-audio.patch
+	polaris-slim-chmap.patch
+	polaris-q6afe-ealready.patch
+	polaris-slim-ngd-defactchan.patch
+	fbcon-scrollback.patch
+"
+builddir="$srcdir/linux-$_tag"
+
+prepare() {
+        default_prepare
+        cp "$srcdir/config-$_flavor.$CARCH" .config
+}
+
+build() {
+	unset LDFLAGS
+	make ARCH="$_carch" LLVM=1 \
+		KBUILD_BUILD_VERSION="$((pkgrel + 1 ))-$_flavor"
+}
+
+package() {
+	if [ -e "$builddir/arch/$_carch/boot/vmlinuz.efi" ]; then
+		# ZBOOT EFI decompressor for EFI booting
+		install -Dm644 "$builddir/arch/$_carch/boot/vmlinuz.efi" \
+			"$pkgdir/boot/linux.efi"
+
+		# Old GZIP'd kernel image for boot.img compatibility
+		install -Dm644 "$builddir/arch/$_carch/boot/vmlinuz" \
+			"$pkgdir/boot/vmlinuz"
+	else
+		echo "WARNING: CONFIG_ZBOOT not enabled!"
+		install -Dm644 "$builddir/arch/$_carch/boot/Image.gz" \
+			"$pkgdir/boot/vmlinuz"
+	fi
+
+	make modules_install dtbs_install \
+		ARCH="$_carch" \
+		LLVM=1 \
+		INSTALL_PATH="$pkgdir"/boot/ \
+		INSTALL_MOD_PATH="$pkgdir"/usr/ \
+		INSTALL_MOD_STRIP=1 \
+		INSTALL_DTBS_PATH="$pkgdir"/boot/dtbs-tmp
+
+	mkdir -p "$pkgdir"/boot/dtbs/qcom
+	cp -r "$pkgdir"/boot/dtbs-tmp/qcom/sdm8* "$pkgdir"/boot/dtbs/qcom
+	rm -rf "$pkgdir"/boot/dtbs-tmp
+
+	rm -f "$pkgdir"/lib/modules/*/build "$pkgdir"/lib/modules/*/source
+
+	install -D "$builddir"/include/config/kernel.release \
+		"$pkgdir"/usr/share/kernel/$_flavor/kernel.release
+}
+
+sha512sums="
+94da173aaf74dd33ef8ff9015e92759481cd0da5bd8a1e52c8664fd372d48a1155655001ad2e9d26557733c71ae8bc448e4ebdf1372b8f32159907a35f0306a9  linux-sdm845-7.1-rc1-r0.tar.gz
+2407728af7897c8a88c0cfa16713828e14d48bae6dd9ddf381382e166176dfe93f9dc7c462e13e918e969882297297191c4c5801d3254b67459907712886eb98  config-postmarketos-qcom-sdm845.aarch64
+d5a064d9463d0a54af0575893945edf4df71fd0079188ab28d1426d077e3a02988e0d6da187a6d40e9adc138446ff92a573e82f6fae126e6b98713d9653a20a6  nt35596s-prepare-prev-first.patch
+6288401b8f6eeb934a40fbad230ba82c6854b22b9c8f528367432c11142e81e82f05b0996ab0b175f0a76d128b30206b20bb5e32f05c679861f4be74d5eb32b7  polaris-battery-fg.patch
+848b320db60aeb348faf195693348187a9d04cf46194657c0017786d18d65be32e63a4bdcee49145252a6540bebc7c9630b805886d5c4dc65cfce92b2b3e238d  polaris-wifi-vht.patch
+1cf392a07bea54410c3381d406754e4af08a515335845109123f7c11c00bfef29d273f434c7937527bb04f440a766a9874e7c79c4b7d9ad4184b832ea8f90955  polaris-wifi-host-cap-skip-quirk.patch
+73c2d284bf40d934396440102fa516e7f3856c18b612495fc149f11719188a3cbfae8e03ecca878bc046851f5fa7f51f31f0ca432656f2dec48dc6a451baec81  polaris-firmware-path.patch
+a75861692151c57ace54230e1876c82bb949d486d0bf933c609ef9a8fd8aa2cf40311831dd6002710d1c3a51f0d88fcdd017bd623e46f9866bfd3135cc73137b  polaris-camera-disabled.patch
+f72885580488a4cb7a691e0058a381f80a139cfaefbd3b92c1226540b56a25df5e83d967746294f83811c2f98cb81b7ec2137bbab65f66bfaa6a04a8468806b8  polaris-audio.patch
+33f5dede888daab17b142ae0b32da1527d1f6e875fb78ca4a1f4dd6bc157393af456a6009e72f0e08c84439b62d57dbc1c823827a450de2b7d4b9af21a9186e8  polaris-slim-chmap.patch
+f766e4b4f288bf1b66f14f21f2959e489ee97f26c08579c41ac17191741a3430ea597ac23e8eacb4ad2ca8779699a6a81a246847cc36cb0b0f9e7bc4146039f5  polaris-q6afe-ealready.patch
+ad10a7b370858d34da791d76e238937d716c3f55190281597bfd5905f67a230359c3bc1117a17089b1d294067477119ad830dfeca86c5b6bddb6a278807c3b40  polaris-slim-ngd-defactchan.patch
+3b708ec9e804308332ccee293409d06929ced7dc18724065847c796db10fd36fe83071034a2999ff1c1a0bbb6068bf42719d00d2154f07932922270508cb25bb  fbcon-scrollback.patch
+"

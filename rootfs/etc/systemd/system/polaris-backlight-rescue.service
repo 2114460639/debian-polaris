@@ -1,0 +1,15 @@
+[Unit]
+Description=Boot backlight rescue (raise restored brightness below 40%%)
+# systemd-backlight@... restores the saved brightness as soon as the
+# backlight device shows up (sysinit phase, wanted by the device unit);
+# order after it, and the script keeps re-checking for a few seconds in
+# case the restore lands late.
+After=systemd-backlight@backlight:backlight.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/polaris-backlight-rescue
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

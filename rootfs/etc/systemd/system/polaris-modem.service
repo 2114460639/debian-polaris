@@ -1,0 +1,12 @@
+[Unit]
+Description=Start Qualcomm MPSS baseband (WiFi WLFW QMI 服务依赖它)
+Wants=qc-tqftpserv.service qc-pd-mapper.service qc-rmtfs.service
+After=qc-tqftpserv.service qc-pd-mapper.service qc-rmtfs.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/polaris-modem-start
+
+[Install]
+WantedBy=multi-user.target

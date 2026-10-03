@@ -1,0 +1,20 @@
+# USB gadget 网络（ncm.usb0 -> usb0），由 systemd-networkd 负责：
+# 设备侧 172.16.42.1/24，内置 DHCP 服务器把 172.16.42.2 发给宿主机 ——
+# 与 postmarketOS 的 unudhcpd 行为一致（pmOS: HOST_IP=172.16.42.1,
+# client_ip=172.16.42.2）。因此 Debian 侧不需要额外装 dnsmasq。
+# NetworkManager 通过 99-usb0-unmanaged.conf 忽略本接口，避免两边抢管。
+[Match]
+Name=usb0
+
+[Network]
+Address=172.16.42.1/24
+ConfigureWithoutCarrier=yes
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+DHCPServer=yes
+
+[DHCPServer]
+PoolOffset=2
+PoolSize=8
+EmitDNS=no
+EmitNTP=no

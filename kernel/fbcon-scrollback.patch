@@ -1,0 +1,251 @@
+--- a/drivers/video/fbdev/core/fbcon.c
++++ b/drivers/video/fbdev/core/fbcon.c
+@@ -196,6 +196,46 @@
+ static void fbcon_modechanged(struct fb_info *info);
+ static void fbcon_set_all_vcs(struct fb_info *info);
+ 
++/*
++ * Screen history used by con_scrolldelta() (Shift+PageUp / Shift+PageDown).
++ *
++ * fbcon has no con_scrolldelta implementation, so the VT layer silently
++ * ignores scrollback requests on framebuffer consoles.  Keep the lines that
++ * scroll off the top of the screen in a ring buffer and repaint the console
++ * from it when the VT layer asks for a scroll delta.
++ */
++#define FBCON_SB_LINES	4096
++
++static u16 *fbcon_sb_buf;		/* FBCON_SB_LINES lines of fbcon_sb_cols */
++static unsigned int fbcon_sb_cols;	/* columns of a stored line */
++static unsigned int fbcon_sb_head;	/* next slot to write */
++static unsigned int fbcon_sb_count;	/* valid slots in the ring */
++static int fbcon_sb_back;		/* lines currently scrolled back */
++static bool fbcon_sb_drawing;		/* set while repainting from history */
++
++static void fbcon_putcs(struct vc_data *vc, const u16 *s, unsigned int count,
++			unsigned int ypos, unsigned int xpos);
++static void fbcon_cursor(struct vc_data *vc, bool enable);
++
++/*
++ * (Re)allocate the history buffer when the console width changes.  Only ever
++ * called from sleepable contexts (fbcon_init/fbcon_resize), never while
++ * outputting, so that fbcon_scroll() itself never has to allocate.
++ */
++static void fbcon_sb_ensure_cols(unsigned int cols)
++{
++	if (!cols || (fbcon_sb_buf && fbcon_sb_cols == cols))
++		return;
++
++	kfree(fbcon_sb_buf);
++	fbcon_sb_buf = kmalloc_array(FBCON_SB_LINES, cols * sizeof(u16),
++				     GFP_KERNEL);
++	fbcon_sb_cols = fbcon_sb_buf ? cols : 0;
++	fbcon_sb_head = 0;
++	fbcon_sb_count = 0;
++	fbcon_sb_back = 0;
++}
++
+ static struct device *fbcon_device;
+ 
+ #ifdef CONFIG_FRAMEBUFFER_CONSOLE_ROTATION
+@@ -414,7 +454,7 @@
+ 
+ 	if (!vc || !con_is_visible(vc) ||
+ 	    fbcon_info_from_console(vc->vc_num) != info ||
+-	    vc->vc_deccm != 1) {
++	    vc->vc_deccm != 1 || fbcon_sb_back) {
+ 		console_unlock();
+ 		return;
+ 	}
+@@ -1233,6 +1273,8 @@
+ 	}
+ 
+ 	par->p = &fb_display[fg_console];
++
++	fbcon_sb_ensure_cols(vc->vc_cols);
+ }
+ 
+ static void fbcon_free_font(struct fbcon_display *p)
+@@ -1375,9 +1417,114 @@
+ 		par->bitops->clear(vc, info, real_y(p, sy), sx, height, width, fg, bg);
+ }
+ 
++/*
++ * Save the lines that are about to leave the top of the screen.  Must run
++ * before fbcon_scroll() rewrites vc_origin.
++ */
++static void fbcon_sb_store(struct vc_data *vc, unsigned int line,
++			   unsigned int count)
++{
++	unsigned int stride = vc->vc_size_row / 2;
++	unsigned short *src = (unsigned short *)vc->vc_origin +
++		stride * line;
++	unsigned int i;
++
++	if (!fbcon_sb_buf || fbcon_sb_cols != vc->vc_cols || !count)
++		return;
++	if (count > FBCON_SB_LINES)
++		count = FBCON_SB_LINES;
++
++	for (i = 0; i < count; i++) {
++		memcpy(&fbcon_sb_buf[fbcon_sb_head * fbcon_sb_cols],
++		       src + stride * i, fbcon_sb_cols * sizeof(u16));
++		fbcon_sb_head = (fbcon_sb_head + 1) % FBCON_SB_LINES;
++		if (fbcon_sb_count < FBCON_SB_LINES)
++			fbcon_sb_count++;
++	}
++}
++
++/* Repaint the whole console: history lines first, then the live content. */
++static void fbcon_sb_redraw(struct vc_data *vc)
++{
++	unsigned int rows = vc->vc_rows;
++	unsigned int cols = vc->vc_cols;
++	unsigned int r;
++
++	if (!fbcon_sb_buf || fbcon_sb_cols != cols)
++		fbcon_sb_back = 0;
++	if (fbcon_sb_back > (int)fbcon_sb_count)
++		fbcon_sb_back = fbcon_sb_count;
++
++	fbcon_sb_drawing = true;
++	for (r = 0; r < rows; r++) {
++		const u16 *row;
++		unsigned int x = 0;
++
++		if (r < (unsigned int)fbcon_sb_back) {
++			unsigned int idx = fbcon_sb_count - fbcon_sb_back + r;
++
++			row = &fbcon_sb_buf[idx * cols];
++		} else {
++			row = (const u16 *)(vc->vc_origin +
++					   vc->vc_size_row *
++					   (r - fbcon_sb_back));
++		}
++
++		/* one putcs() run per attribute, like fbcon_redraw() does */
++		while (x < cols) {
++			unsigned int start = x;
++			u16 attr = row[x] & 0xff00;
++
++			while (x < cols && (row[x] & 0xff00) == attr)
++				x++;
++			fbcon_putcs(vc, &row[start], x - start, r, start);
++		}
++	}
++	fbcon_sb_drawing = false;
++	fbcon_clear_margins(vc, 0);
++}
++
++/* New console output: drop the history view and show the live screen. */
++static void fbcon_sb_live(struct vc_data *vc)
++{
++	if (fbcon_sb_drawing || !fbcon_sb_back)
++		return;
++
++	fbcon_sb_back = 0;
++	fbcon_sb_redraw(vc);
++}
++
++static void fbcon_scrolldelta(struct vc_data *vc, int lines)
++{
++	int newback;
++
++	if (!con_is_visible(vc) || vc->vc_mode != KD_TEXT)
++		return;
++
++	if (!fbcon_sb_buf || fbcon_sb_cols != vc->vc_cols) {
++		fbcon_sb_live(vc);
++		return;
++	}
++
++	/* lines == 0 means "restore the live screen" */
++	newback = lines ? fbcon_sb_back - lines : 0;
++	if (newback < 0)
++		newback = 0;
++	if (newback > (int)fbcon_sb_count)
++		newback = fbcon_sb_count;
++	if (newback == fbcon_sb_back)
++		return;
++
++	fbcon_sb_back = newback;
++	fbcon_sb_redraw(vc);
++	if (!fbcon_sb_back)
++		fbcon_cursor(vc, true);
++}
++
+ static void fbcon_clear(struct vc_data *vc, unsigned int sy, unsigned int sx,
+ 			unsigned int width)
+ {
++	fbcon_sb_live(vc);
+ 	__fbcon_clear(vc, sy, sx, 1, width);
+ }
+ 
+@@ -1388,6 +1535,7 @@
+ 	struct fbcon_display *p = &fb_display[vc->vc_num];
+ 	struct fbcon_par *par = info->fbcon_par;
+ 
++	fbcon_sb_live(vc);
+ 	if (fbcon_is_active(vc, info))
+ 		par->bitops->putcs(vc, info, s, count, real_y(p, ypos), xpos,
+ 				   get_fg_color(vc, info, scr_readw(s)),
+@@ -1411,6 +1559,10 @@
+ 
+ 	par->cur_blink_jiffies = msecs_to_jiffies(vc->vc_cur_blink_ms);
+ 
++	/* no cursor on top of the history view */
++	if (fbcon_sb_back && !fbcon_sb_drawing)
++		enable = false;
++
+ 	if (!fbcon_is_active(vc, info) || vc->vc_deccm != 1)
+ 		return;
+ 
+@@ -1817,6 +1969,8 @@
+ 	if (!width || !height)
+ 		return;
+ 
++	fbcon_sb_live(vc);
++
+ 	/*  Split blits that cross physical y_wrap case.
+ 	 *  Pathological case involves 4 blits, better to use recursive
+ 	 *  code rather than unrolled case
+@@ -1838,8 +1992,14 @@
+ 	if (!fbcon_is_active(vc, info))
+ 		return true;
+ 
++	fbcon_sb_live(vc);
++
+ 	fbcon_cursor(vc, false);
+ 
++	/* full-screen scroll up: remember the lines that are leaving */
++	if (dir == SM_UP && t == 0 && b == vc->vc_rows && count)
++		fbcon_sb_store(vc, t, count);
++
+ 	/*
+ 	 * ++Geert: Only use ywrap/ypan if the console is in text mode
+ 	 * ++Andrew: Only use ypan on hardware text mode when scrolling the
+@@ -2138,6 +2298,7 @@
+ 		par->var = info->var;
+ 	}
+ 	updatescrollmode(p, info, vc);
++	fbcon_sb_ensure_cols(virt_w);
+ 	return 0;
+ }
+ 
+@@ -2152,6 +2313,9 @@
+ 	info = fbcon_info_from_console(vc->vc_num);
+ 	par = info->fbcon_par;
+ 
++	/* switching consoles goes back to the live view */
++	fbcon_sb_back = 0;
++
+ 	if (logo_shown >= 0) {
+ 		struct vc_data *conp2 = vc_cons[logo_shown].d;
+ 
+@@ -3143,6 +3307,7 @@
+ 	.con_set_palette 	= fbcon_set_palette,
+ 	.con_invert_region 	= fbcon_invert_region,
+ 	.con_resize             = fbcon_resize,
++	.con_scrolldelta	= fbcon_scrolldelta,
+ };
+ 
+ static ssize_t rotate_store(struct device *device,

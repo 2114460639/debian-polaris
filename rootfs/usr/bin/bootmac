@@ -1,0 +1,253 @@
+#!/bin/sh
+set -e
+
+#
+# Configure WLAN and Bluetooth MAC addresses for SDM845 devices on boot.
+# This script is triggered through an udev rule when the WLAN or Bluetooth
+# interface comes up.
+#
+# Copyright (c) Dylan Van Assche (2022)
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+WLAN_MAC=""
+BT_MAC=""
+WLAN_INTERFACE="wlan0"
+BT_INTERFACE="hci0"
+# Default MAC prefix
+MAC_PREFIX="0200"
+BT_TIMEOUT=${BT_TIMEOUT:-5} # seconds
+WLAN_TIMEOUT=${WLAN_TIMEOUT:-5} # seconds
+
+USE_LOGGER=true
+[ -n "$SYSTEMD_EXEC_PID" ] && USE_LOGGER=false
+
+log() {
+    if "$USE_LOGGER"; then
+        echo "$@" | logger -t "bootmac"
+    else
+        echo "$@"
+    fi
+}
+
+help_info() {
+    echo "bootmac options:"
+    echo "    -b | --bluetooth              = Configure Bluetooth interface's MAC"
+    echo "    -B | --bluetooth-if <if-name> = Specify the Bluetooth interface name, like hci0. Implies -b"
+    echo "    -w | --wlan                   = Configure WLAN interface's MAC"
+    echo "    -W | --wlan-if <if-name>      = Specify the WLAN interface name, like wlP6p1s0. Implies -w"
+    echo "    -g | --generate-only          = Generate and print the MAC address to stdout, but do not configure the interface."
+    echo "                                    This option must be specified with either -b or -w, but not both."
+    echo "    -p | --prefix <bytes>         = Set a prefix other than 0200, can be longer than 2 bytes, like IEEE OUI"
+    echo ""
+    echo "bootmac will configure the MAC addresses for both interfaces if no arguments are passed"
+}
+
+# Set default values for arguments
+WLAN_CONFIGURE_ARG=0
+BLUETOOTH_CONFIGURE_ARG=0
+GENERATE_ONLY_ARG=0
+
+# Helper function to validate interface name
+validate_interface_name() {
+    if ! echo "$1" | grep -Eq '^[a-zA-Z0-9]+$'; then
+        echo "ERROR: Invalid interface name '$1'. Interface names should only contain alphanumeric characters." >&2
+        exit 1
+    fi
+}
+
+# Helper function to validate hexadecimal string
+validate_hex_string() {
+    if ! echo "$1" | grep -Eq '^[0-9a-fA-F]{4,}$'; then
+        echo "ERROR: Invalid hexadecimal string '$1'. It should be at least 2 octets long with characters in the range 0-9, a-f, and no separators." >&2
+        exit 1
+    fi
+}
+
+# If no arguments are passed, default to configuring both WLAN and Bluetooth
+if [ "$#" -eq 0 ]; then
+    WLAN_CONFIGURE_ARG=1
+    BLUETOOTH_CONFIGURE_ARG=1
+fi
+
+# Parse arguments if any are passed
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -w|--wlan)
+            WLAN_CONFIGURE_ARG=1
+            shift
+            ;;
+        -b|--bluetooth)
+            BLUETOOTH_CONFIGURE_ARG=1
+            shift
+            ;;
+        -W|--wlan-if)
+            WLAN_CONFIGURE_ARG=1
+            validate_interface_name "$2"
+            WLAN_INTERFACE="$2"
+            shift 2
+            ;;
+        -B|--bluetooth-if)
+            BLUETOOTH_CONFIGURE_ARG=1
+            validate_interface_name "$2"
+            BT_INTERFACE="$2"
+            shift 2
+            ;;
+        -p|--prefix)
+            validate_hex_string "$2"
+            MAC_PREFIX="$2"
+            shift 2
+            ;;
+        -g|--generate-only)
+            GENERATE_ONLY_ARG=1
+            shift
+            ;;
+        -h|--help)
+            help_info
+            exit 0
+            ;;
+        *)  # If unknown argument, display help
+            echo "ERROR: Unknown argument detected: $1" >&2
+            help_info
+            exit 1
+            ;;
+    esac
+done
+
+# If "generate-only" is specified, either Wi-Fi or Bluetooth must be requested, but not both
+if [ "$GENERATE_ONLY_ARG" = 1 ] && [ "$((WLAN_CONFIGURE_ARG+BLUETOOTH_CONFIGURE_ARG))" != 1 ]; then
+    echo "ERROR: Either Wi-Fi or Bluetooth must be requested together with --generate-only." >&2
+    echo "" >&2
+    help_info
+    exit 1
+fi
+
+mac_generate() {
+    # Try to retrieve the serial number from the cmdline
+    log "retrieving device serial number"
+    SERIAL_NUMBER=$(grep -o "serialno.*" /proc/cmdline | cut -d" " -f1)
+
+    # If the serial number is missing, fallback to /etc/machine-id
+    # While 'machine-id' ensures the MAC address is consistent across reboot,
+    # it will be changed each time the device is flashed since the machine-id
+    # is generated on first boot.
+    if [ -z "$SERIAL_NUMBER" ]; then
+        log "serial number not available, falling back to machine-id"
+        SERIAL_NUMBER=$(cat /etc/machine-id)
+    fi
+
+    if [ -z "$SERIAL_NUMBER" ]; then
+       log "no unique ID available, cannot generate MAC address"
+       exit 1
+    fi
+
+    log "generating MAC addresses"
+    WLAN_MAC=$(echo "$SERIAL_NUMBER-WLAN" | sha256sum | awk -v prefix="$MAC_PREFIX" '{printf("%s%010s\n", prefix, $1)}')    
+    WLAN_MAC=$(echo "$WLAN_MAC" | cut -c1-12 | sed 's/\(..\)/\1:/g' | sed '$s/:$//')
+
+    BT_MAC=$(echo "$SERIAL_NUMBER-BT" | sha256sum | awk -v prefix="$MAC_PREFIX" '{printf("%s%010s\n", prefix, $1)}')
+    BT_MAC=$(echo "$BT_MAC" | cut -c1-12 | sed 's/\(..\)/\1:/g' | sed '$s/:$//')
+}
+
+mac_bluetooth() {
+    log "setting Bluetooth MAC to $BT_MAC"
+
+    # Check if the Bluetooth interface is up
+    if hciconfig "$BT_INTERFACE" | grep -q "UP"; then
+        # Bring the Bluetooth interface down
+        hciconfig "$BT_INTERFACE" down
+    fi
+
+    # Save current rfkill status, may return a non-zero exit code when blocked
+    set +e
+    BT_RFKILL_UNBLOCKED=$(rfkill -n -r -o DEVICE,TYPE,SOFT | grep "bluetooth" | grep "unblocked")
+    log "saved Bluetooth rfkill state"
+    set -e
+
+    # Bring Bluetooth down, set the generated MAC and bring it up again
+    # The 'yes | btmgmt xxx' workaround is needed for proper working of btmgmt
+    # as noted in https://gitlab.com/postmarketOS/bootmac/-/issues/3
+    yes | btmgmt -i "$BT_INTERFACE" power off
+
+    # Setting the mac addr might fail if the device/driver hasn't finished
+    # initializing, so retry
+    timeout=0
+    while [ $timeout -lt "$BT_TIMEOUT" ]; do
+        if yes | btmgmt -i "$BT_INTERFACE" public-addr "$BT_MAC"; then
+            break
+        fi
+        log "Unable to set Bluetooth MAC, retrying after 1 second..."
+        sleep 1
+        timeout=$((timeout + 1))
+    done
+
+    if [ $timeout -ge "$BT_TIMEOUT" ]; then
+        log "Failed to set Bluetooth MAC address, command timed out after $BT_TIMEOUT seconds"
+        return 1
+    fi
+
+    if [ -n "$BT_RFKILL_UNBLOCKED" ]; then
+        log "restoring Bluetooth rfkill state to unblocked"
+        rfkill unblock bluetooth
+        yes | btmgmt -i "$BT_INTERFACE" power on
+    fi
+}
+
+mac_wlan() {
+    log "setting WLAN MAC to $WLAN_MAC"
+
+    # Save current rfkill status, may return a non-zero exit code when blocked
+    set +e
+    WLAN_RFKILL_UNBLOCKED=$(rfkill -n -r -o DEVICE,TYPE,SOFT | grep "wlan" | grep "unblocked")
+    log "saved WLAN rfkill state"
+    set -e
+
+    # Bring WLAN down, set the extracted MAC and bring it up again
+    # Setting the mac addr might fail if the device/driver hasn't finished
+    # initializing, so retry
+    timeout=0
+    while [ $timeout -lt "$WLAN_TIMEOUT" ]; do
+        if ip link set dev "$WLAN_INTERFACE" down \
+                && ip link set dev "$WLAN_INTERFACE" address "$WLAN_MAC" ; then
+            break
+        fi
+        log "Unable to set wlan MAC, retrying after 1 second..."
+        sleep 1
+        timeout=$((timeout + 1))
+    done
+
+    if [ $timeout -ge "$WLAN_TIMEOUT" ]; then
+        log "Failed to set wlan MAC address, command timed out after $WLAN_TIMEOUT seconds"
+        return 1
+    fi
+
+    if [ -n "$WLAN_RFKILL_UNBLOCKED" ]; then
+      log "restoring WLAN rfkill state to unblocked"
+      rfkill unblock wlan
+      ip link set dev "$WLAN_INTERFACE" up
+    fi
+}
+
+mac_generate
+
+if [ "$GENERATE_ONLY_ARG" = 1 ]; then
+    if [ "$WLAN_CONFIGURE_ARG" = 1 ]; then
+        echo "$WLAN_MAC"
+    elif [ "$BLUETOOTH_CONFIGURE_ARG" = 1 ]; then
+        echo "$BT_MAC"
+    fi
+    exit 0
+fi
+
+if [ "$WLAN_CONFIGURE_ARG" = 1 ]; then
+    log "Configuring MAC address for WLAN"
+    mac_wlan
+    log "WLAN MAC address configured successfully"
+fi;
+
+if [ "$BLUETOOTH_CONFIGURE_ARG" = 1 ]; then
+    log "Configuring MAC address for Bluetooth"
+    mac_bluetooth
+    log "Bluetooth MAC address configured successfully"
+fi;
+

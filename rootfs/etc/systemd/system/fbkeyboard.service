@@ -1,0 +1,17 @@
+[Unit]
+Description=Framebuffer soft keyboard (xiaomi-polaris console)
+ConditionPathExists=/dev/tty0
+After=getty@tty1.service
+
+[Service]
+Type=exec
+# Debian 的 DejaVu 字体路径与 Alpine 不同（/usr/share/fonts/truetype/dejavu/）
+ExecStart=/bin/sh -c "exec /usr/bin/fbkeyboard -r $(cat /sys/class/graphics/fbcon/rotate) -f /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+ExecStartPre=-modprobe uinput
+ExecStartPre=-/bin/sh -c "echo 0 > /sys/class/graphics/fbcon/cursor_blink"
+Restart=always
+RestartSec=1s
+PIDFile=/run/fbkeyboard.pid
+
+[Install]
+WantedBy=multi-user.target

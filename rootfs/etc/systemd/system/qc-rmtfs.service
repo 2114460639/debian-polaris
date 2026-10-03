@@ -1,0 +1,12 @@
+[Unit]
+Description=Qualcomm remotefs service (基带 EFS 存储)
+Before=polaris-modem.service
+
+[Service]
+Environment=LD_LIBRARY_PATH=/usr/lib/qc-mesh
+ExecStart=/usr/lib/qc-mesh/rmtfs -r -P -s
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

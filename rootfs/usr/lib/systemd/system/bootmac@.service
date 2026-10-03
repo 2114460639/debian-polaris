@@ -1,0 +1,7 @@
+[Unit]
+Description=Set %i MAC address
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/bootmac --%i

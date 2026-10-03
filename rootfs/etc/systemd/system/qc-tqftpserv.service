@@ -1,0 +1,12 @@
+[Unit]
+Description=QRTR TFTP service (基带/ WLAN 固件经 QRTR TFTP 拉取)
+Before=polaris-modem.service
+
+[Service]
+Environment=LD_LIBRARY_PATH=/usr/lib/qc-mesh
+ExecStart=/usr/lib/qc-mesh/tqftpserv
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

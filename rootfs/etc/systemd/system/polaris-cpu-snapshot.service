@@ -1,0 +1,7 @@
+[Unit]
+Description=Polaris CPU snapshot (hang forensics)
+Documentation=file:///usr/sbin/polaris-cpu-snapshot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/polaris-cpu-snapshot
