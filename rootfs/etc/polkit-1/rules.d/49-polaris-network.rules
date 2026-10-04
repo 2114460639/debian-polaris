@@ -1,0 +1,14 @@
+// 允许 netdev / sudo 组成员（普通用户 user）完整管理 NetworkManager，
+// 无需密码、无需 polkit agent：
+//   开关 Wi-Fi / 移动数据radio、连接/断开设备、扫描、增删改连接、改主机名/DNS 等。
+// 背景：NetworkManager 自带规则只放开 settings.modify.system，且限定
+// subject.local && subject.active（本地会话）；其余动作默认 auth_admin，
+// 在无图形 polkit agent 的控制台系统上会直接失败。
+// 文件放在 /etc/polkit-1/rules.d 且前缀 49-，先于 /usr/share 的 50-default.rules 生效。
+
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") == 0 &&
+        (subject.isInGroup("netdev") || subject.isInGroup("sudo"))) {
+        return polkit.Result.YES;
+    }
+});

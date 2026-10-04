@@ -31,16 +31,20 @@ if not errorlevel 1 goto :have_fastboot
 echo [!] no fastboot device, trying adb ...
 set "ADBDEV="
 for /f "skip=1 tokens=1,2" %%a in ('"%ADB%" devices 2^>nul') do (
+    rem this system's adbd reports state "host" instead of "device" in adb
     if "%%b"=="device" if not defined ADBDEV set "ADBDEV=%%a"
+    if "%%b"=="host" if not defined ADBDEV set "ADBDEV=%%a"
 )
 if not defined ADBDEV goto :manual
 
 echo [+] adb device found: !ADBDEV! , rebooting to bootloader ...
 "%ADB%" reboot bootloader >nul 2>&1
-call :wait_fastboot 20
+rem this bootloader can take 30-40s to enumerate fastboot after an adb reboot,
+rem so poll for up to 60 seconds (one check per second)
+call :wait_fastboot 60
 if not errorlevel 1 goto :have_fastboot
 
-echo [!] device did not enter fastboot within 20 seconds.
+echo [!] device did not enter fastboot within 60 seconds.
 goto :manual
 
 :have_fastboot
@@ -59,16 +63,33 @@ echo [+] flashing boot.img -^> boot
 if errorlevel 1 ( echo [x] flash boot failed & goto :end )
 
 echo.
-echo [+] flashing xiaomi-polaris.img (sparse) -^> userdata  (about 1.2G, please wait)
+echo [+] erasing userdata partition first - the bootloader never writes
+echo     all-zero data, so the partition must be zeroed before flashing ...
+"%FASTBOOT%" erase userdata
+if errorlevel 1 ( echo [x] erase userdata failed & goto :end )
+
+echo.
+echo [+] flashing xiaomi-polaris.img (sparse) -^> userdata  (image about 1.2G, please wait)
 "%FASTBOOT%" flash userdata "%ROOTFS_IMG%"
 if errorlevel 1 ( echo [x] flash userdata failed & goto :end )
 
 echo.
-echo [+] done, rebooting ...
+echo [+] done, booting the system ...
+rem prefer "fastboot reboot". This bootloader occasionally accepts reboot but
+rem falls back to fastboot instead of booting, and the host fastboot process can
+rem hang forever, so fall back to "fastboot continue" if reboot fails. NOTE: the
+rem phone commits the flashed data to UFS here, which can take several minutes
+rem (screen may go dark then light up again) - this is normal, just wait.
 "%FASTBOOT%" reboot
+if errorlevel 1 (
+    echo [!] fastboot reboot failed, falling back to continue ...
+    "%FASTBOOT%" continue
+)
+echo     (if the phone stays in fastboot, hold Power 12-15s to reset; data is written)
 
 echo.
-echo [+] Finished. First boot may take 1-2 minutes.
+echo [+] Finished. First boot auto-grows the root fs to the whole userdata partition
+echo     (and generates SSH keys), so it may take 1-2 minutes.
 echo     SSH: ssh user@172.16.42.1   password: password
 goto :end
 

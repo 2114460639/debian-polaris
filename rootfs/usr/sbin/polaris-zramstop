@@ -1,0 +1,12 @@
+#!/bin/sh
+# polaris zram 交换设备停止脚本：关闭并复位所有 zram 设备
+# 直接操作 sysfs，避免 zramctl 输出解析在不同版本间的差异。
+
+for dev in /sys/block/zram*; do
+	[ -d "$dev" ] || continue
+	name="$(basename "$dev")"
+	swapoff "/dev/$name" 2>/dev/null || true
+	if [ -w "$dev/reset" ]; then
+		echo 1 > "$dev/reset" 2>/dev/null || true
+	fi
+done

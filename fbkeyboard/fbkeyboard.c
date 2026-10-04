@@ -635,9 +635,19 @@ int main(int argc, char *argv[])
 	int resized[MAX_NR_CONSOLES + 1];
 	struct input_absinfo abs_x, abs_y;
 	FT_Library library;
-	int x, y, row, pressed = -1, released, key;
+	int x, y, row = -1, pressed = -1, released, key;
 	unsigned long long now, hold_start = 0, last_repeat = 0;
 	int repeating = 0;
+	/*
+	 * 只有键盘外观真正变化时才重画。draw_keyboard() 里每个键都要跑一遍
+	 * FreeType 字形渲染，show_fbkeyboard() 每次要把整个键盘区（约 3 MB）
+	 * 写进 /dev/fb0；原来的循环每 REPEAT_POLL_MS 无条件各做一次，
+	 * 空转就吃掉约 30% CPU。redraw=1 表示本轮到需要重画（首次进入、
+	 * 外观变化、或切换 VT 后补画）。
+	 */
+	int redraw = 1;
+	int last_row = -1, last_pressed = -1;
+	int last_layoutuse = 0, last_ctrllock = 0, last_altlock = 0;
 
 	struct sigaction action;
 	struct vt_stat ttyinfo;
@@ -817,13 +827,32 @@ int main(int argc, char *argv[])
 				fdcons = open("/dev/tty0", O_RDWR | O_NOCTTY);
 				set_window_size(fdcons);
 				resized[tty] = 1;
+				/* 切 VT 后控制台会重画，键盘覆盖层需要补画 */
+				redraw = 1;
 			}
 		} else {
 			perror("VT_GETSTATE ioctl failed");
 		}
 
-		draw_keyboard(row, pressed);
-		show_fbkeyboard(fbfd);
+		/*
+		 * 只有按下/抬起的键、或 Shift/Ctrl/Alt 等修饰键状态变化时
+		 * 才重画键盘，其余时间让 poll 阻塞等待触摸事件，CPU 保持空闲。
+		 */
+		if (row != last_row || pressed != last_pressed ||
+		    layoutuse != last_layoutuse || ctrllock != last_ctrllock ||
+		    altlock != last_altlock)
+			redraw = 1;
+
+		if (redraw) {
+			draw_keyboard(row, pressed);
+			show_fbkeyboard(fbfd);
+			last_row = row;
+			last_pressed = pressed;
+			last_layoutuse = layoutuse;
+			last_ctrllock = ctrllock;
+			last_altlock = altlock;
+			redraw = 0;
+		}
 
 		released = check_input_events(fdinput, &x, &y, REPEAT_POLL_MS);
 		now = now_ms();

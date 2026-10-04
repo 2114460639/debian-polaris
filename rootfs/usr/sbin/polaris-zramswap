@@ -1,0 +1,17 @@
+#!/bin/sh
+# polaris zram 交换设备启动脚本
+# 使用 zstd 压缩在内存中提供一块可换出的交换空间，缓解内存压力。
+set -e
+
+SIZE_MB="${POLARIS_ZRAM_SIZE_MB:-4096}"
+ALGO="${POLARIS_ZRAM_ALGO:-zstd}"
+
+# 加载 zram 模块（内核中为内置，此调用无副作用），并保证至少 1 个设备
+modprobe zram num_devices=1
+
+DEV="$(zramctl --find --algorithm "$ALGO" --size "${SIZE_MB}M")"
+[ -n "$DEV" ] || { echo "polaris-zram: 无法创建 zram 设备" >&2; exit 1; }
+
+mkswap "$DEV" >/dev/null
+swapon -p 100 "$DEV"
+echo "polaris-zram: 已启用 $DEV (${SIZE_MB}M, $ALGO)"

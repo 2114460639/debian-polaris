@@ -5,7 +5,7 @@ maintainer="Casey Connolly <kcxt@postmarketos.org>"
 _flavor="postmarketos-qcom-sdm845"
 pkgname=linux-$_flavor
 pkgver=7.1_rc1
-pkgrel=53
+pkgrel=54
 pkgdesc="Mainline Kernel fork for SDM845 devices"
 arch="aarch64"
 _carch="arm64"
@@ -46,6 +46,7 @@ source="
 	polaris-q6afe-ealready.patch
 	polaris-slim-ngd-defactchan.patch
 	fbcon-scrollback.patch
+	polaris-sta-destroy-nowarn.patch
 "
 builddir="$srcdir/linux-$_tag"
 
@@ -107,4 +108,5 @@ f72885580488a4cb7a691e0058a381f80a139cfaefbd3b92c1226540b56a25df5e83d967746294f8
 f766e4b4f288bf1b66f14f21f2959e489ee97f26c08579c41ac17191741a3430ea597ac23e8eacb4ad2ca8779699a6a81a246847cc36cb0b0f9e7bc4146039f5  polaris-q6afe-ealready.patch
 ad10a7b370858d34da791d76e238937d716c3f55190281597bfd5905f67a230359c3bc1117a17089b1d294067477119ad830dfeca86c5b6bddb6a278807c3b40  polaris-slim-ngd-defactchan.patch
 3b708ec9e804308332ccee293409d06929ced7dc18724065847c796db10fd36fe83071034a2999ff1c1a0bbb6068bf42719d00d2154f07932922270508cb25bb  fbcon-scrollback.patch
+6032eee1697682c8792bb34146fc54d73a8bdbe391c3c506fb0aa6125ac360ea6503f5a6dbdcbf6621754a18f243e1b4ad8c9ba86b7de443074f41b95a947ab1  polaris-sta-destroy-nowarn.patch
 "

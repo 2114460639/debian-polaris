@@ -1,0 +1,16 @@
+[Unit]
+Description=polaris zram swap
+Documentation=man:zramctl(8)
+DefaultDependencies=no
+After=systemd-modules-load.service
+Before=swap.target
+ConditionPathExists=/sys/class/zram-control
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/polaris-zramswap
+ExecStop=/usr/sbin/polaris-zramstop
+
+[Install]
+WantedBy=swap.target

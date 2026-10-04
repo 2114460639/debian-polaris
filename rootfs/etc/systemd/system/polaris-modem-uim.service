@@ -1,0 +1,15 @@
+[Unit]
+Description=Qualcomm modem UIM provisioning session (polaris)
+Documentation=https://github.com/2114460639/debian-polaris
+Wants=polaris-modem.service
+After=polaris-modem.service
+Before=ModemManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/polaris-modem-uim
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

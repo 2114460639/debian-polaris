@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """
-把 raw ext4 镜像转成 Android sparse 镜像，全零区域用 CHUNK_TYPE_FILL(0)「明确写入」，
-绝不使用 CHUNK_TYPE_DONT_CARE（跳过）。
+把 raw ext4 镜像转成 Android sparse 镜像：只用 RAW + FILL 两种 chunk，
+绝不产生 CHUNK_TYPE_DONT_CARE 空洞。
 
-为什么要这样做：
-  `fastboot flash` 遇到“非稀疏”的大镜像时会现场把它转成 sparse 格式，而它把全零块
-  写成 DONT_CARE。很多 bootloader 对 DONT_CARE 的处理就是「跳过不写」，于是分区里
-  原来的旧数据（Android 的 /data 等）会原封不动地留在这些空洞里。本 rootfs 镜像有
-  23.8% 的全零块（64 MiB 的日志区、大量 inode table、位图尾部），空洞被跳过就会导致
-  开机 fsck 报：
-      polaris-root: Superblock has an invalid journal (inode 8).  CLEARED.
-      polaris-root: Block bitmap for group 0 is not in the group.
-  然后停在 initramfs 紧急 shell。
+为什么不交给 fastboot 现场转换：
+  `fastboot flash` 遇到“非稀疏”的大镜像时会自己转成 sparse，并把全零块写成
+  DONT_CARE；很多 bootloader 对 DONT_CARE 的处理就是「跳过不写」，分区里原来的
+  旧数据就会残留在这些空洞里。
 
-  对照：postmarketOS 随包镜像同样是 Android sparse，但只有 RAW + FILL，没有 DONT_CARE
-  （全零区域也明确写 0），所以它在真机上能正常启动。
+关键前提（本机 xiaomi-polaris 实测）：
+  这台 bootloader 完全**不写入全零数据** —— FILL chunk 整个跳过，连 RAW chunk 里的
+  全零块也一样跳过（用 cmp 比对刷写前后的设备数据验证过，与 chunk 大小、类型无关）。
+  所以**刷写 userdata 之前必须先 `fastboot erase userdata`**：分区先被清成零后，
+  被 bootloader 跳过的那些零区本来就是零，文件系统才与镜像一致。
+  否则旧 Android 数据会留在「镜像要求为 0」的位图区，每次开机 e2fsck 都报
+      ext2fs_check_desc: Corrupt group descriptor: bad block for block bitmap
+  并强制约 3.5 分钟的全盘检查。
 
 用法：
   python3 mk_sparse_fill.py <raw.img> <out.sparse.img> [--verify]

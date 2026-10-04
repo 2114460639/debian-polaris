@@ -1,0 +1,68 @@
+#!/bin/sh
+# polaris-modem-uim —— 在 ModemManager 启动前为 Qualcomm 基带建立
+# primary GW provisioning session。
+#
+# 背景：本机基带（MPSS）开机后不会自动建立 UIM 的 GW 主会话，
+# ModemManager 读 card status 时看到 index_gw_primary=0xFFFF，会报
+# "GW primary session index unknown" 并把 SIM 判成 sim-missing，
+# 于是 modem 进入 failed、无法注册、也没有 4G 数据。
+# 这里用 qmicli 显式激活主会话（需要卡的 AID），之后 MM 才能正常初始化。
+# 无 SIM 卡时直接退出（不启用 4G）。
+set -u
+
+DEV="${POLARIS_QMI_DEV:-qrtr://0}"
+WAIT_QMI="${POLARIS_QMI_WAIT:-60}"   # 等 QMI 服务出现的秒数
+WAIT_SIM="${POLARIS_SIM_WAIT:-60}"   # 等 SIM 卡出现的秒数
+
+log() { echo "polaris-modem-uim: $*"; }
+
+st=""
+i=0
+while [ "$i" -lt "$WAIT_QMI" ]; do
+    st=$(qmicli -d "$DEV" --uim-get-card-status 2>&1)
+    case "$st" in
+        *"Successfully got card status"*) break ;;
+    esac
+    i=$((i + 2)); sleep 2
+done
+case "$st" in
+    *"Successfully got card status"*) ;;
+    *) log "QMI 服务不可用，放弃"; exit 0 ;;
+esac
+
+i=0
+while [ "$i" -lt "$WAIT_SIM" ]; do
+    case "$st" in
+        *"Card state: 'present'"*) break ;;
+    esac
+    i=$((i + 2)); sleep 2
+    st=$(qmicli -d "$DEV" --uim-get-card-status 2>&1)
+done
+case "$st" in
+    *"Card state: 'present'"*) ;;
+    *) log "未检测到 SIM 卡，跳过（不启用 4G）"; exit 0 ;;
+esac
+
+if printf '%s\n' "$st" | grep -Eq "Primary GW:[[:space:]]+slot"; then
+    log "primary GW provisioning session 已存在"
+    exit 0
+fi
+
+# 取 USIM 应用的 AID（qmicli 输出里 'Application type: usim' 之后的
+# 'Application ID:' 下一行就是 AID，形如 A0:00:00:00:87:...）
+aid=$(printf '%s\n' "$st" | awk '
+    /Application type:.*usim/ { f = 1 }
+    f && /Application ID:/    { getline; gsub(/[ \t:]/, ""); print; exit }
+')
+
+if [ -z "$aid" ]; then
+    log "未能解析 USIM AID，放弃"
+    exit 1
+fi
+
+if qmicli -d "$DEV" --uim-change-provisioning-session="session-type=primary-gw-provisioning,activate=yes,slot=1,aid=$aid" >/dev/null 2>&1; then
+    log "已建立 primary GW provisioning session (slot 1, aid $aid)"
+else
+    log "建立 provisioning session 失败"
+    exit 1
+fi

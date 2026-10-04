@@ -1,0 +1,28 @@
+--- a/net/mac80211/sta_info.c
++++ b/net/mac80211/sta_info.c
+@@ -1548,7 +1548,7 @@
+ 
+ 	if (sta->sta_state == IEEE80211_STA_AUTHORIZED) {
+ 		ret = _sta_info_move_state(sta, IEEE80211_STA_ASSOC, recalc);
+-		WARN_ON_ONCE(ret);
++		(void)ret;
+ 	}
+ 
+ 	/* now keys can no longer be reached */
+@@ -1565,7 +1565,6 @@
+ 	while (sta->sta_state > IEEE80211_STA_NONE) {
+ 		ret = _sta_info_move_state(sta, sta->sta_state - 1, recalc);
+ 		if (ret) {
+-			WARN_ON_ONCE(1);
+ 			break;
+ 		}
+ 	}
+@@ -1577,7 +1576,7 @@
+ 	if (sta->uploaded) {
+ 		ret = drv_sta_state(local, sdata, sta, IEEE80211_STA_NONE,
+ 				    IEEE80211_STA_NOTEXIST);
+-		WARN_ON_ONCE(ret != 0);
++		(void)ret;
+ 	}
+ 
+ 	sta_dbg(sdata, "Removed STA %pM\n", sta->sta.addr);

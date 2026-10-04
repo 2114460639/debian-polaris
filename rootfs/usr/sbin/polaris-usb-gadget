@@ -1,0 +1,49 @@
+#!/bin/sh
+# 在 Debian 上创建与 postmarketOS 完全一致的 g1 USB gadget（NCM 网络）。
+#
+# pmOS 的 initramfs 会在切根前把 g1 建好并带进 rootfs，Debian 的 initramfs
+# 没有这一步，所以由本脚本 + polaris-usb-gadget.service 在开机时补上。
+# 参数与 device-xiaomi-polaris/deviceinfo 一致，宿主机 udev/adb 才能识别：
+#   idVendor 0x18D1 / idProduct 0x4EE7（Android「充电+调试」，adb 规则命中；
+#   pmOS 默认的 d001 会被 gvfs/libgphoto2 当成 MTP 播放器）。
+#
+# 后续 polaris-adbd-setup 会往这个已有 gadget 里追加 ffs.adb 函数，
+# 因此本脚本必须先于 polaris-adbd.service 执行。
+set -e
+CONFIGFS=/sys/kernel/config
+G=$CONFIGFS/usb_gadget/g1
+
+# configfs 挂载点（pmOS 由 initramfs 挂好，Debian 需自己挂）
+mountpoint -q "$CONFIGFS" || mount -t configfs none "$CONFIGFS"
+
+# gadget/网络/functionfs 相关模块（内核未内建，需显式加载）
+for m in libcomposite u_ether usb_f_ncm usb_f_fs; do
+	modprobe "$m" 2>/dev/null || true
+done
+
+# 已存在（服务重启）则直接认为完成，避免重复 mkdir 报错
+[ -d "$G" ] && exit 0
+
+UDC=$(ls /sys/class/udc 2>/dev/null | head -1)
+[ -n "$UDC" ] || { echo "polaris-usb-gadget: 没有可用 UDC" >&2; exit 1; }
+
+mkdir -p "$G"
+echo 0x18D1 > "$G/idVendor"
+echo 0x4EE7 > "$G/idProduct"
+
+mkdir -p "$G/strings/0x409"
+echo "Xiaomi"          > "$G/strings/0x409/manufacturer"
+echo "Xiaomi Mi Mix2S" > "$G/strings/0x409/product"
+echo "polaris"         > "$G/strings/0x409/serialnumber"
+
+mkdir -p "$G/functions/ncm.usb0"
+
+mkdir -p "$G/configs/c.1/strings/0x409"
+echo "USB network" > "$G/configs/c.1/strings/0x409/configuration"
+
+# symlink 必须相对 gadget 目录解析 -> 先 cd
+cd "$G"
+ln -s functions/ncm.usb0 configs/c.1/
+
+echo "$UDC" > "$G/UDC"
+echo "polaris-usb-gadget: bound $UDC"
