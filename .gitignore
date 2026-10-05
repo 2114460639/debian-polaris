@@ -6,6 +6,10 @@
 tools/
 drivers/
 
+# 本机私有 overlay（WiFi 密码等敏感配置，仓库是 Public，不能入库）
+# 结构与 rootfs/ 一致，用 scripts/apply_local_overlay.sh 注入镜像
+local/
+
 # 构建临时产物
 __pycache__/
 *.pyc

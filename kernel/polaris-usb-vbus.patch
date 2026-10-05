@@ -1,0 +1,42 @@
+--- a/drivers/regulator/qcom_usb_vbus-regulator.c
++++ b/drivers/regulator/qcom_usb_vbus-regulator.c
+@@ -92,6 +92,7 @@
+ 
+ static const struct of_device_id qcom_usb_vbus_regulator_match[] = {
+ 	{ .compatible = "qcom,pm8150b-vbus-reg" },
++	{ .compatible = "qcom,pmi8998-vbus-reg" },
+ 	{ }
+ };
+ MODULE_DEVICE_TABLE(of, qcom_usb_vbus_regulator_match);
+--- a/arch/arm64/boot/dts/qcom/pmi8998.dtsi
++++ b/arch/arm64/boot/dts/qcom/pmi8998.dtsi
+@@ -30,6 +30,12 @@
+ 			status = "disabled";
+ 		};
+ 
++		pmi8998_vbus: usb-vbus-regulator@1100 {
++			compatible = "qcom,pmi8998-vbus-reg";
++			status = "disabled";
++			reg = <0x1100>;
++		};
++
+ 		pmi8998_gpios: gpio@c000 {
+ 			compatible = "qcom,pmi8998-gpio", "qcom,spmi-gpio";
+ 			reg = <0xc000>;
+--- a/arch/arm64/boot/dts/qcom/sdm845-xiaomi-polaris.dts
++++ b/arch/arm64/boot/dts/qcom/sdm845-xiaomi-polaris.dts
+@@ -643,6 +643,14 @@
+ 	status = "okay";
+ };
+ 
++&pmi8998_vbus {
++	regulator-min-microamp = <500000>;
++	regulator-max-microamp = <3000000>;
++	/* TEMP: S2 验证用，确认 regulator 能拉起 VBUS，S3 接入 tcpm 消费者后移除 */
++	regulator-always-on;
++	status = "okay";
++};
++
+ &usb_1_dwc3 {
+ 	dr_mode = "peripheral";
+ 

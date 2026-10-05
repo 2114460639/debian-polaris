@@ -1,0 +1,87 @@
+--- a/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec.c
++++ b/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec.c
+@@ -150,7 +150,11 @@
+ };
+ 
+ static const struct pmic_typec_resources pmi8998_typec_res = {
+-	/* PD PHY not present */
++	/*
++	 * The PMI8998 PD PHY is register- and IRQ-compatible with the PM8150B
++	 * one, but sits in a separate register block (0x1700).
++	 */
++	.pdphy_res = &pm8150b_pdphy_res,
+ 	.port_res = &pmi8998_port_res,
+ };
+ 
+--- a/arch/arm64/boot/dts/qcom/pmi8998.dtsi
++++ b/arch/arm64/boot/dts/qcom/pmi8998.dtsi
+@@ -38,10 +38,25 @@
+ 
+ 		pmi8998_typec: typec@1300 {
+ 			compatible = "qcom,pmi8998-typec";
+-			reg = <0x1300>;
++			reg = <0x1300>,
++			      <0x1700>;
+ 
+-			interrupts = <0x2 0x13 0x7 IRQ_TYPE_EDGE_BOTH>;
+-			interrupt-names = "type-c-change";
++			interrupts = <0x2 0x13 0x7 IRQ_TYPE_EDGE_BOTH>,
++				     <0x2 0x17 0x0 IRQ_TYPE_EDGE_RISING>,
++				     <0x2 0x17 0x1 IRQ_TYPE_EDGE_RISING>,
++				     <0x2 0x17 0x2 IRQ_TYPE_EDGE_RISING>,
++				     <0x2 0x17 0x3 IRQ_TYPE_EDGE_RISING>,
++				     <0x2 0x17 0x4 IRQ_TYPE_EDGE_RISING>,
++				     <0x2 0x17 0x5 IRQ_TYPE_EDGE_RISING>,
++				     <0x2 0x17 0x6 IRQ_TYPE_EDGE_RISING>;
++			interrupt-names = "type-c-change",
++					  "sig-tx",
++					  "sig-rx",
++					  "msg-tx",
++					  "msg-rx",
++					  "msg-tx-failed",
++					  "msg-tx-discarded",
++					  "msg-rx-discarded";
+ 
+ 			vdd-vbus-supply = <&pmi8998_vbus>;
+ 
+--- a/arch/arm64/boot/dts/qcom/sdm845-xiaomi-polaris.dts
++++ b/arch/arm64/boot/dts/qcom/sdm845-xiaomi-polaris.dts
+@@ -10,6 +10,7 @@
+ #include <dt-bindings/gpio/gpio.h>
+ #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
+ #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
++#include <dt-bindings/usb/pd.h>
+ #include <dt-bindings/input/linux-event-codes.h>
+ #include <dt-bindings/sound/qcom,q6afe.h>
+ #include <dt-bindings/sound/qcom,q6asm.h>
+@@ -652,17 +653,28 @@
+ &pmi8998_typec {
+ 	status = "okay";
+ 
++	vdd-pdphy-supply = <&vreg_l24a_3p075>;
++
+ 	connector {
+ 		compatible = "usb-c-connector";
+ 
++		op-sink-microwatt = <10000000>;
+ 		power-role = "dual";
+ 		data-role = "dual";
+ 		self-powered;
+ 
+-		/* No PD PHY on PMI8998, run Type-C only */
+-		pd-disable;
+ 		typec-power-opmode = "default";
+ 
++		source-pdos = <PDO_FIXED(5000, 3000,
++					 PDO_FIXED_DUAL_ROLE |
++					 PDO_FIXED_USB_COMM |
++					 PDO_FIXED_DATA_SWAP)>;
++
++		sink-pdos = <PDO_FIXED(5000, 3000,
++				       PDO_FIXED_DUAL_ROLE |
++				       PDO_FIXED_USB_COMM |
++				       PDO_FIXED_DATA_SWAP)>;
++
+ 		ports {
+ 			#address-cells = <1>;
+ 			#size-cells = <0>;
