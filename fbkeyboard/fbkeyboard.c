@@ -361,9 +361,14 @@ int is_repeat_key(int row, int pressed)
 
 /*
  * Waits for a relevant input event.
- * Returns 0 if touched, 1 if released and -1 if nothing happened within
- * timeout_ms milliseconds (i.e. the finger rests on a key without moving,
- * which is what the auto-repeat logic in main() waits for).
+ *
+ * 返回值：
+ *   0  触点位置有更新（手指按下 / 在键盘上滑动）
+ *   1  手指抬起（这一次触摸结束）
+ *   2  内核丢弃了事件（SYN_DROPPED），触点状态已复位；调用方只清高亮，
+ *      **不要**补发按键
+ *  -1  timeout_ms 毫秒内没有任何触摸事件（手指停在键上不动），
+ *      这正是 main() 里长按连发逻辑所等待的状态
  *
  * 多触点状态。内核 input 层对 ABS_MT_* 轴是「按 slot 去重」的：新触点如果
  * 落在同一个 slot、且坐标与上一次相同，ABS_MT_POSITION_X/Y 会被直接丢弃，
@@ -382,27 +387,20 @@ static int slot_x[SLOT_MAX], slot_y[SLOT_MAX];
 static unsigned char slot_down[SLOT_MAX];
 static int cur_slot;
 static int primary_slot = -1;
-/*
- * 本次调用中是否读到了「新触点按下」（ABS_MT_TRACKING_ID 由 -1 变成
- * 有效值）。main() 用它来判断手指是不是重新按了一次，从而允许新的一次
- * 触摸再发一个字符——即使上一次触摸的抬手事件被漏掉也不会卡住。
- */
-static int touch_new_press = 0;
 
 int check_input_events(int fdinput, int *x, int *y, int timeout_ms)
 {
 	int got_events = 0;
+	int frames = 0;
 	int ax, ay;
 	struct pollfd pfd;
-
-	touch_new_press = 0;
 
 	pfd.fd = fdinput;
 	pfd.events = POLLIN;
 	pfd.revents = 0;
 
 	while (!done) {
-		int pressed_now = -1, released_now = 0;
+		int pressed_now = -1;
 
 		if (poll(&pfd, 1, got_events ? 0 : timeout_ms) <= 0)
 			break;
@@ -411,44 +409,82 @@ int check_input_events(int fdinput, int *x, int *y, int timeout_ms)
 		for (;;) {
 			if (read(fdinput, &ie, sizeof(ie)) != (ssize_t)sizeof(ie))
 				break;
-			if (ie.type == EV_ABS) {
-				switch (ie.code) {
-					case ABS_MT_SLOT:
-						if (ie.value >= 0 && ie.value < SLOT_MAX)
-							cur_slot = ie.value;
-						break;
-					case ABS_MT_POSITION_X:
-						slot_x[cur_slot] = ie.value;
-						break;
-					case ABS_MT_POSITION_Y:
-						slot_y[cur_slot] = ie.value;
-						break;
-					case ABS_MT_TRACKING_ID:
-						if (ie.value != -1) {
-							slot_down[cur_slot] = 1;
-							pressed_now = cur_slot;
-							touch_new_press = 1;
-						} else {
-							slot_down[cur_slot] = 0;
-							if (primary_slot == cur_slot)
-								released_now = 1;
-						}
-						break;
+			if (ie.type == EV_SYN) {
+				if (ie.code == SYN_DROPPED) {
+					/*
+					 * 内核输入缓冲区溢出：中间的事件（很可能
+					 * 包含手指抬起的 ABS_MT_TRACKING_ID=-1）
+					 * 已被丢弃，无法回放。把触点状态整体复位
+					 * 并返回 2，让调用方只清高亮、不补发按键。
+					 */
+					memset(slot_down, 0, sizeof(slot_down));
+					primary_slot = -1;
+					return 2;
 				}
-			} else if (ie.type == EV_SYN && ie.code == SYN_REPORT) {
-				break;
+				if (ie.code == SYN_REPORT)
+					break;
+				continue;
+			}
+			if (ie.type != EV_ABS)
+				continue;
+			switch (ie.code) {
+				case ABS_MT_SLOT:
+					if (ie.value >= 0 && ie.value < SLOT_MAX)
+						cur_slot = ie.value;
+					break;
+				case ABS_MT_POSITION_X:
+					slot_x[cur_slot] = ie.value;
+					break;
+				case ABS_MT_POSITION_Y:
+					slot_y[cur_slot] = ie.value;
+					break;
+				case ABS_MT_TRACKING_ID:
+					if (ie.value != -1) {
+						slot_down[cur_slot] = 1;
+						pressed_now = cur_slot;
+					} else {
+						slot_down[cur_slot] = 0;
+					}
+					break;
 			}
 		}
 		got_events = 1;
 
-		if (released_now) {
+		/*
+		 * 抬起判定只看「被跟踪的那个触点还是不是按下的」。
+		 * 原来的写法要求触发抬手的 slot 恰好等于 primary_slot
+		 * （primary_slot == cur_slot）才算抬起，一旦上报顺序里
+		 * ABS_MT_SLOT 与 TRACKING_ID 的先后、或者多指交错，
+		 * 抬手就会被漏掉，高亮和长按连发会一直卡在按下的状态。
+		 */
+		if (primary_slot >= 0 && !slot_down[primary_slot]) {
 			primary_slot = -1;
 			return 1;
 		}
-		if (pressed_now >= 0 && primary_slot < 0)
-			primary_slot = pressed_now;
-		if (primary_slot >= 0)
-			break;
+		/* 没有当前触点时，从还按着的 slot 里挑一个 */
+		if (primary_slot < 0) {
+			int i;
+			if (pressed_now >= 0 && slot_down[pressed_now])
+				primary_slot = pressed_now;
+			else
+				for (i = 0; i < SLOT_MAX; i++)
+					if (slot_down[i]) {
+						primary_slot = i;
+						break;
+					}
+		}
+		if (primary_slot >= 0) {
+			/*
+			 * 这里不 break，而是继续把已经排队的帧一次读完，
+			 * 只把最新状态交给调用方。原来每轮只读一帧，重绘
+			 * 期间积压的事件会让高亮（和输入）明显滞后于手指；
+			 * 积压到内核输入缓冲区满还会触发 SYN_DROPPED 丢事件
+			 * （抬手事件丢在里面就是「按下去不释放」）。
+			 * 单次最多读 32 帧，保证调用耗时可控。
+			 */
+			if (++frames >= 32)
+				break;
+		}
 	}
 
 	if (!got_events || primary_slot < 0)
@@ -697,8 +733,11 @@ int main(int argc, char *argv[])
 	int x, y, row = -1, pressed = -1, released, key;
 	unsigned long long now, hold_start = 0, last_repeat = 0;
 	int repeating = 0;
-	/* 本次触摸是否已经发过字符（按下即发，同一次触摸只发一个） */
-	int emitted = 0;
+	/*
+	 * 长按连发是否已经发过键。抬起释放模式下，按下不发键、抬起才发；
+	 * 但长按连发过的键在抬起时不能再发一次（否则会多出一个字符）。
+	 */
+	int repeated_sent = 0;
 	/*
 	 * 只有键盘外观真正变化时才重画。draw_keyboard() 里每个键都要跑一遍
 	 * FreeType 字形渲染，show_fbkeyboard() 每次要把整个键盘区（约 3 MB）
@@ -920,41 +959,43 @@ int main(int argc, char *argv[])
 
 		if (released == 1) {
 			/*
-			 * 手指抬起：只取消高亮。按键在按下的那一刻就已经发出，
-			 * 所以抬起这里不再补发——否则会变成一次触摸出两个字符。
+			 * 手指抬起：这时才发键（抬起释放）。注：此处刻意不改成
+			 * 按下即发——按下只高亮、抬手位置所在的键才是真正输入的键；
+			 * 手指滑出键盘时 pressed 已经是 -1，抬手不会发键。
+			 */
+			if (pressed != -1 && !repeated_sent)
+				send_uinput_event(row, pressed);
+			pressed = -1;
+			repeating = 0;
+			repeated_sent = 0;
+			continue;
+		}
+
+		if (released == 2) {
+			/*
+			 * 内核丢了事件（SYN_DROPPED），抬手很可能就在丢掉的那
+			 * 一段里。只清高亮，绝不补发字符，否则会凭空多出字符。
 			 */
 			pressed = -1;
 			repeating = 0;
-			emitted = 0;
+			repeated_sent = 0;
 			continue;
 		}
 
 		if (released == 0) {
 			/*
-			 * 按下或滑动：落到新键上立刻发键，而不是等手指抬起。
-			 * 原来在抬起时才发键，用户按下去没有任何反应，必须抬手才
-			 * 出一个字符（如果抬手事件被漏掉，这个字符就永远不出来）。
-			 * emitted 保证一次触摸只发一个字符：手指按下后又在键盘上
-			 * 滑动时只移动高亮，不会一路刷出一串字符。
+			 * 按下或滑动：只更新高亮，等手指抬起再发键。
+			 * 换到别的键就重置长按计时，避免滑过去立刻连发。
 			 */
 			int newrow = row, newpressed = -1;
-			int changed;
 
-			/* 新的一次按下：允许再发一个字符（防止上次漏抬手卡住） */
-			if (touch_new_press)
-				emitted = 0;
 			identify_touched_key(x, y, &newrow, &newpressed);
-			changed = (newrow != row || newpressed != pressed);
-			if (changed) {
+			if (newrow != row || newpressed != pressed) {
 				row = newrow;
 				pressed = newpressed;
 				hold_start = now;
 				repeating = 0;
-			}
-			if (pressed != -1 && !emitted
-			    && (changed || touch_new_press)) {
-				send_uinput_event(row, pressed);
-				emitted = 1;
+				repeated_sent = 0;
 			}
 			continue;
 		}
@@ -965,6 +1006,7 @@ int main(int argc, char *argv[])
 				if (now - hold_start >= REPEAT_DELAY_MS) {
 					send_uinput_event(row, pressed);
 					repeating = 1;
+					repeated_sent = 1;
 					last_repeat = now;
 				}
 			} else if (now - last_repeat >= REPEAT_INTERVAL_MS) {

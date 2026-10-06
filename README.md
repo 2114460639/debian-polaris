@@ -33,7 +33,7 @@ Linux framebuffer 终端，屏幕底部常驻一个全尺寸虚拟键盘（fbkey
 | USB Net USB 网络             |  Y  | ✅ 设备侧固定 `172.16.42.1/24` + 内置 DHCP，插线电脑即得 `172.16.42.2`；由 systemd-networkd 管理，与 NetworkManager 不打架                                                                                                                                                                                                                                 |
 | USB OTG USB 主机 / Type-C PD |  Y  | ✅ DWC3 由 `peripheral` 改为 `otg`（`usb-role-switch`），Type-C 连接器按 CC 自动判定角色 —— 插 U 盘 / 键鼠即可当 **USB 主机**；PMI8998 的 Type-C/PD 能力已补齐（VBUS 调节器 + TCPC + PD PHY），支持 **PD 边充边用 / 电源角色自动切换**；sink PDO 追加 **9 V / 2 A** 档，接 PD 充电器可协商到 9 V（实测 VBUS 8.69 V、输入约 10.1 W、电池约 8.5 W，比 5 V 档 +9% / +12%），见 [kernel/README.md](kernel/README.md) 改动 4 |
 | ADB 直连                     |  Y  | ✅ 内置静态 adbd 开机自启；`adb shell` 直接得到 `root@polaris:~#` 并默认位于 `/root`，方向键 / Ctrl-C 行编辑正常                                                                                                                                                                                                                                               |
-| Keyboard 虚拟键盘              |  Y  | ✅ fbkeyboard 常驻下半屏、uinput 注入；`Bcksp` 与方向键长按连发（0.4 s 后 / 每 80 ms）；隐藏格右上 / 右下发 `Shift+PgUp` / `Shift+PgDn` 回滚控制台日志；按 slot 维护多触点状态，同键连按不再漏触、高亮不再跳键（实机验证）                                                                                                                                                                                                                   |
+| Keyboard 虚拟键盘              |  Y  | ✅ fbkeyboard 常驻下半屏、uinput 注入；`Bcksp` 与方向键长按连发（0.4 s 后 / 每 80 ms，连发过的键抬起不补发）；隐藏格右上 / 右下发 `Shift+PgUp` / `Shift+PgDn` 回滚控制台日志；**输入方式为抬起释放**（按下只高亮、抬起时才发抬起位置所在的键，滑出键盘抬起不发），并修复了漏抬手导致的「按下去不释放」（抬手判定不再要求 slot 相等、`SYN_DROPPED` 复位触点、单次最多读 32 帧防积压；实机验证）                                                                                                                                                                                                                   |
 | Keys 电源 / 音量键              |  Y  | ✅ 电源键循环亮度 40% → 80% → 熄屏；音量键短按注入 `↑` / `↓`、长按调 PulseAudio 音量                                                                                                                                                                                                                                                                       |
 | Polkit 普通用户免密管理网络          |  Y  | ✅ `/etc/polkit-1/rules.d/49-polaris-network.rules` 把 `org.freedesktop.NetworkManager.*` 全部动作授予 `netdev` / `sudo` 组，`user` 免 sudo 即可 `nmtui` / `nmcli`                                                                                                                                                                              |
 | Suspend 挂起 / 休眠            |  N  | ⛔ 已整体禁用（`IdleAction=ignore` + mask `sleep.target` 等）；空闲 10 分钟仅按 `consoleblank=600` 熄屏，不改系统状态                                                                                                                                                                                                                                       |
@@ -353,7 +353,7 @@ fastboot reboot               # 若卡住/失败，再执行 fastboot continue
 | 镜像                   | 刷入分区       | 内容                                                                                                                                                      | 大小                                                       |
 | -------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
 | `boot.img`           | `boot`     | 内核 `7.1.0-rc1-sdm845`（#63，含 fbcon 回滚、USB OTG/Type-C/PD 补丁；WiFi 死锁补丁只改模块）+ 追加 DTB + initramfs                                                            | 25,825,280 B                                             |
-| `xiaomi-polaris.img` | `userdata` | Debian 根文件系统（ext4, 4096 字节块，**首启自动扩容到整块 userdata**），**Android sparse 格式**；含 r62 内核的 USB/PD 模块（`qcom_pmic_tcpm.ko.zst`、`qcom_usb_vbus-regulator.ko.zst`） | 1,682,800,944 B (≈1.57 GiB，声明覆盖 550502 个 4K 块 ≈ 2.1 GiB) |
+| `xiaomi-polaris.img` | `userdata` | Debian 根文件系统（ext4, 4096 字节块，**首启自动扩容到整块 userdata**），**Android sparse 格式**；含 r62 内核的 USB/PD 模块（`qcom_pmic_tcpm.ko.zst`、`qcom_usb_vbus-regulator.ko.zst`） | 1,682,805,040 B (≈1.57 GiB，声明覆盖 550502 个 4K 块 ≈ 2.1 GiB) |
 
 > 同一份根文件系统的 raw ext4 版（2.1 GiB）为
 > `/home/wxs/debian-polaris/out/xiaomi-polaris-2g.img`；分区全尺寸稀疏版为
@@ -391,5 +391,5 @@ cd images
 md5sum -c boot.img.md5 xiaomi-polaris.img.md5
 ```
 
-预期结果：`boot.img` = `95713e42…`、`xiaomi-polaris.img` = `41ef2b68…`
-（对应 raw 版 `5662f1df…`，可在 `/home/wxs/debian-polaris/out/xiaomi-polaris-2g.img` 下比对）。
+预期结果：`boot.img` = `95713e42…`、`xiaomi-polaris.img` = `406dbadc…`
+（对应 raw 版 `9efb6da0…`，可在 `/home/wxs/debian-polaris/out/xiaomi-polaris-2g.img` 下比对）。
