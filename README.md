@@ -55,12 +55,15 @@ debian-polaris/
 ├── kernel/                      内核方法：fbcon 回滚 / WiFi 关机死锁补丁、APKBUILD、内核 config
 │   └── README.md                构建步骤与三处改动说明
 ├── rootfs/                      镜像内定制的配置文件（保持原始路径）
-│   ├── etc/systemd/system/      fbkeyboard / polaris-* / qc-* 单元、睡眠 mask
+│   ├── etc/systemd/system/      fbkeyboard / polaris-* / qc-* 单元、睡眠 mask、
+│   │                            journald 重启上限、fstrim 门禁（见「稳定性加固」）
+│   ├── etc/systemd/journald.conf.d/  journald 限容与写限速
 │   ├── etc/systemd/network/     usb0 固定 172.16.42.1
 │   ├── etc/NetworkManager/      WiFi MAC 固定、usb0 不交给 NM、4G 连接 Mobile4G
 │   ├── etc/polkit-1/rules.d/    普通用户免密管理 NetworkManager
 │   ├── etc/issue               登录界面来源标注（Build by …debian-polaris）
 │   ├── usr/sbin/polaris-modem-uim  建立 UIM primary GW provisioning session
+│   ├── usr/sbin/polaris-adbd-setup  往 g1 gadget 追加 functionfs adbd（含守护循环）
 │   ├── usr/bin/bootmac          WiFi/蓝牙 MAC 固定脚本
 │   └── usr/lib/udev/rules.d/    bootmac 触发规则
 ├── scripts/
@@ -308,8 +311,28 @@ fastboot reboot               # 若卡住/失败，再执行 fastboot continue
   扬声器/麦克风端口规范暴露；`pactl` 可用（`polaris-keys` 的长按调音量依赖它）。
   蓝牙耳机/音箱（A2DP）见上方「蓝牙」。
 - **界面语言**：英文 `en_US.UTF-8`（未装中文字体）。
-- **稳定性加固**：systemd 硬件看门狗 `RuntimeWatchdogSec=10`；内核 `panic=120`、
-  `panic_on_oops=1`、`panic_on_rcu_stall=1`（卡死自动重启）；`fs.protected_regular=0`。
+- **稳定性加固**：systemd 硬件看门狗 `RuntimeWatchdogSec=30` / `RebootWatchdogSec=30`；
+  内核 `panic=10`、`panic_on_oops=1`、`panic_on_rcu_stall=1`（卡死自动重启）；
+  `fs.protected_regular=0`。
+  - **日志与 trim**（针对一次整机卡死事故的加固）：事故表现为虚拟键盘能回显字符却敲不了
+    回车、登录无反应，SSH/ADB 同时消失，load average 105、约 100 个任务卡在 D 态 ——
+    起因是 `fstrim.timer` 到点后 UFS 拒绝 UNMAP/DISCARD，内核长时间 D 态重试；同时
+    `polaris-adbd-setup` 里常开的 `set -x` 让守护循环每 3 秒往 journal 写 4~6 行，
+    开机约 1 小时 42 分持久化 journal 就涨到 343 MiB。journald 随后也卡进 D 态，
+    systemd 反复重启它、SIGKILL 又收不掉 D 态进程，最终堆到 250+ 个 unit，
+    getty/sshd/adbd 全部调度不上（tty 回显由内核 `n_tty` 完成，不依赖用户态进程，
+    所以键盘看起来还活着）。四项加固：
+    1. 去掉 `set -x`，改为仅在设置 `POLARIS_ADBD_TRACE=1` 时开启；稳态下守护循环完全不写日志
+       （实测从 50 行/30 秒降到 0）。
+    2. `/etc/systemd/journald.conf.d/10-polaris-limits.conf`：`SystemMaxUse=200M`、
+       `SystemKeepFree=1G`、`RuntimeMaxUse=64M`、写限速 `RateLimitBurst=2000/30s`。
+    3. `/etc/systemd/system/systemd-journald.service.d/10-polaris-restart-limit.conf`：
+       `StartLimitIntervalSec=300` / `StartLimitBurst=10` / `RestartSec=5`，
+       避免「journald 卡死 → 无限重启」把 PID 1 拖垮。
+    4. 禁用 **fstrim**：`/etc/systemd/system/fstrim.service.d/10-polaris-disable.conf`
+       用 `ConditionPathExists=/etc/polaris-allow-fstrim` 做门禁（发布仓库的 `rootfs/`
+       经 debugfs 注入 ext4 镜像，无法创建 mask 到 `/dev/null` 的符号链接）。
+       需要手动 trim 时：`touch /etc/polaris-allow-fstrim && systemctl start fstrim.service`。
 - **内存与交换（zram）**：开机自动启用一块 **4 GiB、zstd 压缩**的 zram 交换设备
   （`/dev/zram0`，priority 100），由开机自启的 `polaris-zram-swap.service`
   （`WantedBy=swap.target`）调用 `/usr/sbin/polaris-zramswap` 创建；`systemctl stop` 时

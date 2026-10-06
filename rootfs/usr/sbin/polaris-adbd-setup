@@ -1,0 +1,118 @@
+#!/bin/sh
+# 在 postmarketOS 的 g1 USB gadget 上启用 functionfs adbd（与 NCM USB 网络共存）。
+#
+# 由 polaris-adbd.service 开机自启。必须由 systemd 的 system 单元托管（而不是
+# 挂在 SSH 会话里）：SSH 断开时 systemd 会回收整个 session cgroup，会话内的
+# adbd/守护脚本会被连带杀死，functionfs 一关整个 gadget 从宿主机消失、USB 网络
+# 中断且无法远程恢复（只能重启）。
+#
+# 三个关键坑（实测记录，改动前先读 polaris-adbd-README.md）：
+#  1. SSH 会话断开会杀死 adbd -> 必须 systemd 单元（本脚本即由此保证）。
+#  2. configfs 绑定期间禁止创建函数 symlink：ln -s functions/ffs.adb configs/c.1/
+#     在 UDC 已绑定时返回 ENOENT/EINVAL。ln 只能放在 echo "" > UDC 与
+#     echo $UDC > UDC 的临界窗口内（mkdir functions 与挂载 functionfs 则允许）。
+#  3. configfs symlink 目标相对 cwd 解析：必须先 cd 到 configs/c.1 再 ln。
+#
+# 设计：独立网络看门狗先行（UDC 空超过 6 秒强制重绑，ffs 绑不上则自动剔除
+# ffs 只恢复 NCM 网络，保证任何失败都不会锁死设备）-> 不断网的准备工作 ->
+# 最短临界窗口 -> adbd/UDC 守护循环。日志见 journalctl -u polaris-adbd。
+trap '' HUP
+# adbd 硬编码 exec /bin/sh（argv[0]=sh）。bash 以 sh 名运行时是 POSIX 模式，
+# 不读 /etc/bash.bashrc 也不读 ~/.bashrc，只看 $ENV。导出它，交互式 adb shell
+# 才会得到 root@polaris:~# 提示符并默认进入 /root（见 /root/.adbshrc）。
+export ENV=/root/.adbshrc
+G=/sys/kernel/config/usb_gadget/g1
+# 调试时用 Environment=POLARIS_ADBD_TRACE=1 打开 shell 追踪。默认必须关闭：
+# set -x 会让下面每 3 秒一轮的守护循环持续往 journal 写入数行，长跑会撑爆日志、
+# 拖垮 journald（曾导致整机 D 态堆积、load 105、键盘/SSH/adb 全部无响应）。
+[ -n "$POLARIS_ADBD_TRACE" ] && set -x
+ADBD_PID=
+
+# 等 configfs 与 g1 gadget（由 pmOS initramfs 创建并带进 rootfs）
+n=0
+while [ ! -d "$G" ] && [ "$n" -lt 60 ]; do
+	sleep 1
+	n=$((n + 1))
+done
+if [ ! -d "$G" ]; then
+	echo "g1 gadget 不存在（configfs 未挂载？），放弃"
+	exit 1
+fi
+UDC=$(ls /sys/class/udc | head -1)
+if [ -z "$UDC" ]; then
+	echo "没有可用 UDC，放弃"
+	exit 1
+fi
+
+# ---- 网络看门狗（独立后台）：UDC 空 >6s 强制恢复，ffs 绑不上就剔除 ffs ----
+(
+	trap '' HUP
+	n=0
+	while [ $n -lt 20 ]; do
+		sleep 6
+		n=$((n + 1))
+		if [ -z "$(cat "$G/UDC" 2>/dev/null)" ]; then
+			echo "WD: UDC empty, rebind attempt $n"
+			if echo "$UDC" > "$G/UDC" 2>/dev/null; then
+				echo "WD: rebound OK (with ffs)"
+				exit 0
+			fi
+			echo "WD: rebind failed, stripping ffs"
+			rm -f "$G/configs/c.1/ffs.adb"
+			rmdir "$G/functions/ffs.adb" 2>/dev/null
+			if echo "$UDC" > "$G/UDC" 2>/dev/null; then
+				echo "WD: ncm-only restored"
+				exit 0
+			fi
+			echo "WD: restore FAILED"
+		fi
+	done
+) &
+WD_PID=$!
+
+# ---- 不断网的准备工作 ----
+# mkdir functions 在 UDC 绑定期间允许；但 symlink 不允许（见临界窗口）
+mkdir -p "$G/functions/ffs.adb"
+mkdir -p /dev/usb-ffs/adb
+grep -q " /dev/usb-ffs/adb " /proc/mounts || mount -t functionfs adb /dev/usb-ffs/adb
+echo "MNT_RC=$?"
+
+# adbd 启动后立即向 ep0 写入 USB 描述符（ffs 进入 READY）
+# 调试时可在 service 里加 Environment=ADB_TRACE=all 打开协议日志
+/usr/bin/adbd &
+ADBD_PID=$!
+sleep 2
+kill -0 "$ADBD_PID" 2>/dev/null && echo "ADBD_UP pid=$ADBD_PID" || echo "ADBD_START_FAIL"
+
+# ---- 临界窗口：unbind 后才能创建 symlink（configfs 绑定期间禁止修改配置）；
+# symlink 目标相对 cwd 解析，必须 cd 到 c.1 里再 ln ----
+echo "" > "$G/UDC"
+rm -f "$G/configs/c.1/ffs.adb"
+( cd "$G/configs/c.1" && ln -s ../../functions/ffs.adb ffs.adb )
+echo "LN_RC=$?"
+if echo "$UDC" > "$G/UDC"; then
+	echo "SETUP_OK"
+else
+	echo "BIND_FAILED"
+fi
+
+# ---- adbd 守护 + UDC 守护 ----
+while true; do
+	sleep 3
+	if ! kill -0 "$ADBD_PID" 2>/dev/null; then
+		echo "GUARDIAN: adbd died, restart"
+		/usr/bin/adbd &
+		ADBD_PID=$!
+		sleep 2
+		kill -0 "$ADBD_PID" 2>/dev/null || echo "GUARDIAN: restart failed"
+	fi
+	if [ -z "$(cat "$G/UDC" 2>/dev/null)" ]; then
+		echo "GUARDIAN: UDC unbound, rebind"
+		echo "$UDC" > "$G/UDC" 2>/dev/null || {
+			rm -f "$G/configs/c.1/ffs.adb"
+			rmdir "$G/functions/ffs.adb" 2>/dev/null
+			echo "$UDC" > "$G/UDC" 2>/dev/null
+			echo "GUARDIAN: ncm-only fallback"
+		}
+	fi
+done
