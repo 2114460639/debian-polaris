@@ -364,66 +364,117 @@ int is_repeat_key(int row, int pressed)
  * Returns 0 if touched, 1 if released and -1 if nothing happened within
  * timeout_ms milliseconds (i.e. the finger rests on a key without moving,
  * which is what the auto-repeat logic in main() waits for).
+ *
+ * 多触点状态。内核 input 层对 ABS_MT_* 轴是「按 slot 去重」的：新触点如果
+ * 落在同一个 slot、且坐标与上一次相同，ABS_MT_POSITION_X/Y 会被直接丢弃，
+ * 帧里只剩 ABS_MT_SLOT / ABS_MT_TRACKING_ID / ABS_MT_PRESSURE。原来这里
+ * 要求同一帧里同时拿到 X 和 Y 才判定键位，于是这类「按下」整帧被忽略——
+ * 表现为按同一个键时要按很多次才出一个字符，偶尔某个带坐标的旧帧进来
+ * 还会让高亮跳到别的键上。
+ *
+ * 按内核约定改成维护每个 slot 的位置与按下状态：去重只发生在「值没变」时，
+ * 所以 slot 里缓存的值就是该触点的真实位置。再固定跟踪一个活动 slot
+ * （优先沿用上一次的）作为当前触点。
  */
+#define SLOT_MAX 16
+
+static int slot_x[SLOT_MAX], slot_y[SLOT_MAX];
+static unsigned char slot_down[SLOT_MAX];
+static int cur_slot;
+static int primary_slot = -1;
+/*
+ * 本次调用中是否读到了「新触点按下」（ABS_MT_TRACKING_ID 由 -1 变成
+ * 有效值）。main() 用它来判断手指是不是重新按了一次，从而允许新的一次
+ * 触摸再发一个字符——即使上一次触摸的抬手事件被漏掉也不会卡住。
+ */
+static int touch_new_press = 0;
+
 int check_input_events(int fdinput, int *x, int *y, int timeout_ms)
 {
-	int released = 0;
-	int key = 1;
-	int absolute_x = -1, absolute_y = -1;
+	int got_events = 0;
+	int ax, ay;
 	struct pollfd pfd;
+
+	touch_new_press = 0;
 
 	pfd.fd = fdinput;
 	pfd.events = POLLIN;
 	pfd.revents = 0;
 
-	while (!done && !released && (absolute_x == -1 || absolute_y == -1)) {
-		if (poll(&pfd, 1, timeout_ms) <= 0)
-			return -1;
-		while (read(fdinput, &ie, sizeof(struct input_event))
-		       && !(ie.type == EV_SYN && ie.code == SYN_REPORT)) {
+	while (!done) {
+		int pressed_now = -1, released_now = 0;
+
+		if (poll(&pfd, 1, got_events ? 0 : timeout_ms) <= 0)
+			break;
+
+		/* 读一整帧（到 SYN_REPORT 为止），只更新 slot 状态 */
+		for (;;) {
+			if (read(fdinput, &ie, sizeof(ie)) != (ssize_t)sizeof(ie))
+				break;
 			if (ie.type == EV_ABS) {
 				switch (ie.code) {
+					case ABS_MT_SLOT:
+						if (ie.value >= 0 && ie.value < SLOT_MAX)
+							cur_slot = ie.value;
+						break;
 					case ABS_MT_POSITION_X:
-						absolute_x = ie.value;
-						released = 0;
-						key = 0;
+						slot_x[cur_slot] = ie.value;
 						break;
 					case ABS_MT_POSITION_Y:
-						absolute_y = ie.value;
-						released = 0;
-						key = 0;
+						slot_y[cur_slot] = ie.value;
 						break;
 					case ABS_MT_TRACKING_ID:
-						if (ie.value == -1) {
-							released = 1;
+						if (ie.value != -1) {
+							slot_down[cur_slot] = 1;
+							pressed_now = cur_slot;
+							touch_new_press = 1;
+						} else {
+							slot_down[cur_slot] = 0;
+							if (primary_slot == cur_slot)
+								released_now = 1;
 						}
 						break;
 				}
-			}
-			if (ie.type == EV_SYN && ie.code == SYN_MT_REPORT && key) {
-				released = 1;
+			} else if (ie.type == EV_SYN && ie.code == SYN_REPORT) {
+				break;
 			}
 		}
+		got_events = 1;
+
+		if (released_now) {
+			primary_slot = -1;
+			return 1;
+		}
+		if (pressed_now >= 0 && primary_slot < 0)
+			primary_slot = pressed_now;
+		if (primary_slot >= 0)
+			break;
 	}
+
+	if (!got_events || primary_slot < 0)
+		return -1;
+
+	ax = slot_x[primary_slot];
+	ay = slot_y[primary_slot];
 	switch (rotate) {
 		case FB_ROTATE_UR:
-			*x = absolute_x * 0x10000 / twidth;
-			*y = absolute_y * 0x10000 / theight;
+			*x = ax * 0x10000 / twidth;
+			*y = ay * 0x10000 / theight;
 			break;
 		case FB_ROTATE_UD:
-			*x = 0x10000 - absolute_x * 0x10000 / twidth;
-			*y = 0x10000 - absolute_y * 0x10000 / theight;
+			*x = 0x10000 - ax * 0x10000 / twidth;
+			*y = 0x10000 - ay * 0x10000 / theight;
 			break;
 		case FB_ROTATE_CW:
-			*x = absolute_y * 0x10000 / theight;
-			*y = 0x10000 - absolute_x * 0x10000 / twidth;
+			*x = ay * 0x10000 / theight;
+			*y = 0x10000 - ax * 0x10000 / twidth;
 			break;
 		case FB_ROTATE_CCW:
-			*x = 0x10000 - absolute_y * 0x10000 / theight;
-			*y = absolute_x * 0x10000 / twidth;
+			*x = 0x10000 - ay * 0x10000 / theight;
+			*y = ax * 0x10000 / twidth;
 			break;
 	}
-	return released;
+	return 0;
 }
 
 /*
@@ -442,8 +493,16 @@ void identify_touched_key(int x, int y, int *row, int *pressed)
 			break;
 		case 2:
 			*row = 1;		// a - l
-			if (x > 0x10000 / 20 && x < 0x10000 * 19 / 20)
-				*pressed = 10 + (x * 10 - 0x10000 / 2) / 0x10000;
+			/*
+			 * 原来只在 x 落在 1/20..19/20 之间才给 pressed 赋值，
+			 * 手指点到字母行最左/最右那一小条时 pressed 保持 -1，整次
+			 * 触摸被丢弃。这里改成夹到最近的那个字母键。
+			 */
+			*pressed = 10 + (x * 10 - 0x10000 / 2) / 0x10000;
+			if (*pressed < 10)
+				*pressed = 10;
+			else if (*pressed > 18)
+				*pressed = 18;
 			break;
 		case 1:
 			if (x < 0x10000 * 3 / 20) {
@@ -638,6 +697,8 @@ int main(int argc, char *argv[])
 	int x, y, row = -1, pressed = -1, released, key;
 	unsigned long long now, hold_start = 0, last_repeat = 0;
 	int repeating = 0;
+	/* 本次触摸是否已经发过字符（按下即发，同一次触摸只发一个） */
+	int emitted = 0;
 	/*
 	 * 只有键盘外观真正变化时才重画。draw_keyboard() 里每个键都要跑一遍
 	 * FreeType 字形渲染，show_fbkeyboard() 每次要把整个键盘区（约 3 MB）
@@ -858,24 +919,42 @@ int main(int argc, char *argv[])
 		now = now_ms();
 
 		if (released == 1) {
-			/* 手指抬起：短按在此刻发键；长按已经连发过了就不再补发 */
-			if (pressed != -1 && !repeating)
-				send_uinput_event(row, pressed);
+			/*
+			 * 手指抬起：只取消高亮。按键在按下的那一刻就已经发出，
+			 * 所以抬起这里不再补发——否则会变成一次触摸出两个字符。
+			 */
 			pressed = -1;
 			repeating = 0;
+			emitted = 0;
 			continue;
 		}
 
 		if (released == 0) {
-			/* 按下或滑动：只有落到另一个键上才重新计时 */
+			/*
+			 * 按下或滑动：落到新键上立刻发键，而不是等手指抬起。
+			 * 原来在抬起时才发键，用户按下去没有任何反应，必须抬手才
+			 * 出一个字符（如果抬手事件被漏掉，这个字符就永远不出来）。
+			 * emitted 保证一次触摸只发一个字符：手指按下后又在键盘上
+			 * 滑动时只移动高亮，不会一路刷出一串字符。
+			 */
 			int newrow = row, newpressed = -1;
+			int changed;
 
+			/* 新的一次按下：允许再发一个字符（防止上次漏抬手卡住） */
+			if (touch_new_press)
+				emitted = 0;
 			identify_touched_key(x, y, &newrow, &newpressed);
-			if (newrow != row || newpressed != pressed) {
+			changed = (newrow != row || newpressed != pressed);
+			if (changed) {
 				row = newrow;
 				pressed = newpressed;
 				hold_start = now;
 				repeating = 0;
+			}
+			if (pressed != -1 && !emitted
+			    && (changed || touch_new_press)) {
+				send_uinput_event(row, pressed);
+				emitted = 1;
 			}
 			continue;
 		}
