@@ -354,11 +354,6 @@ fastboot reboot               # 若卡住/失败，再执行 fastboot continue
 - initramfs 由 Debian `initramfs-tools` 生成（`MODULES=list`：ext4/ufs/显示等驱动已编入内核，
   故无需带模块），约 10.7 MB，内含自建的 `polaris-usb-gadget` 所需组件。
 
-功能对齐（均可用）：fbkeyboard 虚拟键盘、大字体、电源键亮度循环、音量键方向键/音量、
-USB 网络 172.16.42.1、**USB 主机 / Type-C PD 边充边用**、ADB 直连、免密 sudo、
-**普通用户免密管理网络**、英文 locale、SSH、
-Wi‑Fi（nmtui）、**移动数据 4G（插 SIM 即用，Wi‑Fi 优先）**、登录界面来源标注、无 GUI、无摄像头。
-
 ## 已知限制
 
 - 无图形界面、无 GPU 桌面（本版本刻意如此，控制台不受影响）。
