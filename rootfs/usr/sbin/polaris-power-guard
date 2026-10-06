@@ -1,0 +1,163 @@
+#!/bin/sh
+# polaris-power-guard —— 低电量安全关机 + 充电功率控制（仅 xiaomi-polaris）
+#
+# 背景（均为本机实测，不是推测）：
+#   1) 根文件系统在 UFS 上。电量耗尽 = 非正常断电，UFS 重新上电后 HS-G2 链路
+#      可能训练失败（hibern8 enter failed / -ENOLINK），开机直接卡死并触发
+#      看门狗 pretimeout，只能长按电源强制复位。所以要在电量见底前主动、
+#      干净地关机，别让它自己断电。
+#   2) pmi8998-charger 的 current_max 是**输入电流上限**（µA）。驱动默认只给
+#      500 mA（USB 类型被认成 SDP）；实测此时输入 469 mA、电池电流 -368 mA
+#      —— 插着充电器也在掉电，根本充不进去。抬到 1.5 A 后输入 1.34 A、
+#      电池 +1.1 A，才真正开始充电。
+#   3) qcom-battery 的 current_now 符号：正 = 充入电池，负 = 从电池放电。
+#      （charger 的 current_max 写入后生效，而 status 写入返回 0 但实际无效，
+#        所以功率控制只能用 current_max。）
+#   4) sysfs 读不到时必须当作“未知”，绝不能当成 0：曾经在 qcom_smbx 驱动
+#      重载后 capacity 读成空字符串，被归零成 0%，脚本误判“电量 0% 未充电”
+#      而主动关机（真实电量 22% 且在充电）。所以：读不到 -> 本轮不动作。
+#
+# 策略（阈值都可用 /etc/default/polaris-power-guard 覆盖）：
+#   容量 <= OFF_PCT(7%)  且未在充电，且**连续 OFF_CONFIRM 次**成立 -> 进入
+#                        OFF_GRACE(30s) 倒计时后才干净关机；倒计时内只要电池
+#                        恢复充入电流就取消关机（防止充电器只是没插好）
+#                        （单次读数异常绝不能触发关机，见下）
+#   容量 <= WARN_PCT(10%) 且未在充电 -> 控制台 + journal 警告一次
+#   容量 >= HI_PCT(80%) 且已插电   -> 进入维持模式：把输入限流压到“刚好等于
+#                                     系统消耗”，净充电流收敛到 0，不再给电池充电
+#   容量 <= LO_PCT(50%)           -> 恢复到 FAST_LIMIT 正常充电
+#
+# 调试：POLARIS_BAT_DIR / POLARIS_CHG_DIR 可指向假 sysfs 目录做离线验证。
+set -u
+
+BAT=${POLARIS_BAT_DIR:-/sys/class/power_supply/qcom-battery}
+CHG=${POLARIS_CHG_DIR:-/sys/class/power_supply/pmi8998-charger}
+
+POLL=${POLARIS_POLL:-20}
+WARN_PCT=${POLARIS_WARN_PCT:-10}
+OFF_PCT=${POLARIS_OFF_PCT:-7}
+HI_PCT=${POLARIS_HI_PCT:-80}
+LO_PCT=${POLARIS_LO_PCT:-50}
+FAST_LIMIT=${POLARIS_FAST_LIMIT:-1500000}    # 正常充电的输入上限（µA）
+MAINT_MIN=${POLARIS_MAINT_MIN:-500000}       # 维持模式输入上限下限
+MAINT_MAX=${POLARIS_MAINT_MAX:-1000000}      # 维持模式输入上限上限
+DEADBAND=${POLARIS_DEADBAND:-100000}         # 净电流死区（µA），防止来回抖
+OFF_CONFIRM=${POLARIS_OFF_CONFIRM:-3}        # 关机判据需连续成立多少次
+OFF_GRACE=${POLARIS_OFF_GRACE:-30}           # 判定危险后宽限多少秒（期间可取消）
+
+log() { logger -t polaris-power-guard -- "$*" 2>/dev/null || true; }
+say() { { printf '%s\n' "$*" > /dev/console; } 2>/dev/null || true; log "$*"; }
+rd()  { cat "$1" 2>/dev/null; }
+# isnum: 带可选负号的整数才返回 0；空串/非数字返回 1 -> 表示“读不到”
+# （current_now 会为负数表示放电，所以必须接受负号）
+isnum() {
+    v=${1:-}
+    [ -n "$v" ] || return 1
+    case "$v" in -*) v=${v#-} ;; esac
+    [ -n "$v" ] || return 1
+    case "$v" in *[!0-9]*) return 1 ;; esac
+    return 0
+}
+num() { case "${1:-}" in ''|*[!0-9-]*) echo 0 ;; *) echo "$1" ;; esac; }
+mA()  { echo "$(( $1 / 1000 ))"; }
+set_limit() { echo "$1" > "$CHG/current_max" 2>/dev/null; }
+
+mode=""
+warned=0
+off_streak=0
+nodata_logged=0
+
+say "polaris-power-guard: 启动（警告 ${WARN_PCT}% / 关机 ${OFF_PCT}%×${OFF_CONFIRM}+${OFF_GRACE}s / 限流 ${LO_PCT}%<->${HI_PCT}% / 正常上限 $(mA "$FAST_LIMIT") mA）"
+
+while :; do
+    capr=$(rd "$BAT/capacity")
+    bnowr=$(rd "$BAT/current_now")
+    inowr=$(rd "$CHG/current_now")
+    onliner=$(rd "$CHG/online")
+
+    # 关键：读不到就当作“未知”，本轮什么都不做（尤其是绝不关机）。
+    if ! isnum "$capr" || ! isnum "$bnowr"; then
+        off_streak=0
+        if [ "$nodata_logged" = 0 ]; then
+            nodata_logged=1
+            log "电池读数不可用（capacity='$capr' current_now='$bnowr'），本轮不动作（禁止按 0% 处理）"
+        fi
+        sleep "$POLL"
+        continue
+    fi
+    nodata_logged=0
+
+    cap=$capr
+    bnow=$bnowr
+    inow=$(num "$inowr")
+    online=$(num "$onliner")
+
+    [ "$cap" -gt "$WARN_PCT" ] && warned=0
+
+    # ---------- 低电量保护：必须连续 OFF_CONFIRM 次成立才关机 ----------
+    if [ "$cap" -le "$OFF_PCT" ] && [ "$bnow" -le 0 ]; then
+        off_streak=$((off_streak + 1))
+    else
+        off_streak=0
+    fi
+    if [ "$off_streak" -ge "$OFF_CONFIRM" ]; then
+        say "polaris-power-guard: 电量 ${cap}% 且未在充电（连续 ${off_streak} 次确认），${OFF_GRACE} 秒后安全关机；期间若恢复充电则取消"
+        cancelled=0
+        i=0
+        while [ "$i" -lt "$OFF_GRACE" ]; do
+            sleep 1
+            i=$((i + 1))
+            br=$(rd "$BAT/current_now")
+            if isnum "$br" && [ "$br" -gt 0 ]; then
+                say "polaris-power-guard: 第 ${i} 秒检测到恢复充电（电池电流 $(mA "$br") mA），已取消关机"
+                cancelled=1
+                break
+            fi
+        done
+        if [ "$cancelled" = 0 ]; then
+            say "polaris-power-guard: ${OFF_GRACE} 秒内未恢复充电，现在安全关机（避免非正常断电损伤 UFS）"
+            sync
+            systemctl poweroff
+            exit 0
+        fi
+        off_streak=0
+    fi
+    if [ "$cap" -le "$WARN_PCT" ] && [ "$bnow" -le 0 ] && [ "$warned" = 0 ]; then
+        warned=1
+        say "polaris-power-guard: 警告：电量仅 ${cap}% 且当前未在充电，请检查充电器（<= ${OFF_PCT}% 将自动关机）"
+    fi
+
+    # ---------- 充电功率控制 ----------
+    if [ "$online" = 1 ] && isnum "$inowr"; then
+        if [ "$cap" -ge "$HI_PCT" ]; then
+            if [ "$mode" != maint ]; then
+                mode=maint
+                say "polaris-power-guard: 电量 ${cap}% >= ${HI_PCT}%，进入维持模式（只供应系统消耗，停止充入电池）"
+            fi
+            # 净电流偏离死区就重新标定：以“输入电流 - 电池电流”作为系统消耗
+            if [ "$bnow" -gt "$DEADBAND" ] || [ "$bnow" -lt "$((0 - DEADBAND))" ]; then
+                tgt=$((inow - bnow))
+                [ "$tgt" -lt "$MAINT_MIN" ] && tgt=$MAINT_MIN
+                [ "$tgt" -gt "$MAINT_MAX" ] && tgt=$MAINT_MAX
+                if set_limit "$tgt"; then
+                    log "维持模式：输入上限 -> $(mA "$tgt") mA（输入 $(mA "$inow") mA / 电池 $(mA "$bnow") mA）"
+                fi
+            fi
+        elif [ "$mode" != fast ]; then
+            mode=fast
+            set_limit "$FAST_LIMIT" && \
+                say "polaris-power-guard: 电量 ${cap}% < ${HI_PCT}%，恢复充电，输入上限 $(mA "$FAST_LIMIT") mA"
+        elif [ "$bnow" -lt 0 ]; then
+            # 插着电却在放电 = 限流被压得太低（驱动默认 500 mA 就是这个下场），顶回去
+            cur=$(num "$(rd "$CHG/current_max")")
+            if [ "$cur" -lt "$FAST_LIMIT" ]; then
+                set_limit "$FAST_LIMIT" && \
+                    log "电池在放电（$(mA "$bnow") mA）而输入上限只有 $(mA "$cur") mA，重置为 $(mA "$FAST_LIMIT") mA"
+            fi
+        fi
+    else
+        mode=""
+    fi
+
+    sleep "$POLL"
+done

@@ -1,0 +1,13 @@
+[Unit]
+Description=Battery guard: low-battery safe shutdown + charge power control (polaris)
+Documentation=https://github.com/2114460639/debian-polaris
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/polaris-power-guard
+ExecStart=/usr/sbin/polaris-power-guard
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

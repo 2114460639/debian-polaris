@@ -1,0 +1,34 @@
+# polaris-power-guard 可调参数（xiao-mi MIX 2S / polaris）
+# 修改后：systemctl restart polaris-power-guard
+#
+# 单位说明：电流类都是 µA（1000000 = 1 A），容量是百分比。
+
+# --- 低电量保护 ---
+# <= 此容量且“没有充入电流”时，在控制台/journal 警告一次
+POLARIS_WARN_PCT=10
+# <= 此容量且“没有充入电流”时，干净关机（避免非正常断电损伤 UFS）
+POLARIS_OFF_PCT=7
+# 关机判据需连续成立多少次才真的关机（每次间隔 POLARIS_POLL 秒）。
+# 防止单次读数异常（例如驱动重载把 sysfs 读坏）造成误关机。
+POLARIS_OFF_CONFIRM=3
+# 判定危险后再宽限多少秒才真正关机（每秒复检一次）。这期间只要电池恢复
+# 充入电流就取消关机——防止“充电器只是没插好”被误判成没电。
+POLARIS_OFF_GRACE=30
+
+# --- 充电功率控制（仅在插着充电器时生效）---
+# >= 此容量进入“维持模式”：把输入限流压到 ≈ 系统消耗，净充电流收敛到 0
+POLARIS_HI_PCT=80
+# <= 此容量恢复 FAST_LIMIT 正常充电
+POLARIS_LO_PCT=50
+# 正常充电的输入电流上限。注意：驱动默认只给 500000（SDP），此时手机
+# 插着线也在净放电（实测输入 469 mA / 电池 -368 mA），所以这里必须给足；
+# 接电脑 USB 口（真 500 mA 口）时可改回 500000。
+POLARIS_FAST_LIMIT=1500000
+# 维持模式的输入上限取值范围（夹在两者之间，防止读数漂移导致过充/过放）
+POLARIS_MAINT_MIN=500000
+POLARIS_MAINT_MAX=1000000
+# 净充电流死区：|电池电流| 小于它就认为已经“只维持消耗”，不再调整
+POLARIS_DEADBAND=100000
+
+# --- 轮询间隔（秒）---
+POLARIS_POLL=20
