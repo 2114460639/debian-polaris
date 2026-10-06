@@ -54,7 +54,7 @@
  #include <dt-bindings/input/linux-event-codes.h>
  #include <dt-bindings/sound/qcom,q6afe.h>
  #include <dt-bindings/sound/qcom,q6asm.h>
-@@ -652,17 +653,28 @@
+@@ -652,17 +653,37 @@
  &pmi8998_typec {
  	status = "okay";
  
@@ -63,7 +63,12 @@
  	connector {
  		compatible = "usb-c-connector";
  
-+		op-sink-microwatt = <10000000>;
++		/*
++		 * 9 V is drawn through the same USBIN path as 5 V; the PMI8998
++		 * charger is rated well above this, so declare both voltages and
++		 * let the PD source pick the highest one it can supply.
++		 */
++		op-sink-microwatt = <18000000>;
  		power-role = "dual";
  		data-role = "dual";
  		self-powered;
@@ -78,6 +83,10 @@
 +					 PDO_FIXED_DATA_SWAP)>;
 +
 +		sink-pdos = <PDO_FIXED(5000, 3000,
++				       PDO_FIXED_DUAL_ROLE |
++				       PDO_FIXED_USB_COMM |
++				       PDO_FIXED_DATA_SWAP)
++			     PDO_FIXED(9000, 2000,
 +				       PDO_FIXED_DUAL_ROLE |
 +				       PDO_FIXED_USB_COMM |
 +				       PDO_FIXED_DATA_SWAP)>;

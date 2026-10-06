@@ -102,7 +102,7 @@ Type-C 边充边用（PD）」。上游 PMI8998 的 Type-C / PD 支持是残缺�
 - `qcom_pmic_typec_port.c/.h`：端口驱动补齐 PMI8998 分支；
 - 结果：TCPC 能按 CC 引脚自动判定连接方向与角色，无需手动干预。
 
-**4.4 `polaris-usb-pd.patch`（87 行）**
+**4.4 `polaris-usb-pd.patch`（96 行）**
 - `pmi8998.dtsi`：`pmi8998_typec: typec@1300` 增加第二个寄存器块 `0x1700`
   （PD PHY 所在块）与 7 个 PD PHY 中断（`sig-tx/rx`、`msg-tx/rx`、
   `msg-tx-failed/discarded`、`msg-rx-discarded`）；
@@ -110,6 +110,14 @@ Type-C 边充边用（PD）」。上游 PMI8998 的 Type-C / PD 支持是残缺�
   connector 去掉 `pd-disable`，补 `op-sink-microwatt` / `source-pdos` /
   `sink-pdos`（5V/3A、dual-role、USB-comm、data-swap）——PD 电源协商所需，
   缺任一项都会让 TCPC 驱动 probe 失败（`-EINVAL`）。
+- **9 V 快充（pkgrel 62 追加）**：`sink-pdos` 在 5V/3A 之后追加 **`9000 mV / 2000 mA`**
+  一档，`op-sink-microwatt` 由 `10000000` 提到 **`18000000`**。
+  `tcpm` 只按「电压匹配 + 功率最高」挑选 source PDO，设备不声明 9 V 就永远不会协商到 9 V；
+  声明后接 PD 充电器即协商成功（实测 VBUS 8.69 V、输入约 10.1 W、电池约 8.5 W，
+  相比 5 V 档输入 +9% / 电池 +12%，且 `online=1` 稳定无过压停充）。
+  > 说明：9 V 与 5 V 走同一条 USBIN 输入路径，PMI8998 充电器耐压远高于此；
+  > 未达标称 18 W 的原因是驱动侧电池快充限流（`FAST_CHARGE_CURRENT_CFG` ≈1.95 A）与
+  > 9 V 下 AICL 把有效输入上限压到 ≈1.5 A，属驱动行为、非 PD 协商问题。
 
 > 4.3 / 4.4 会重编 `qcom_pmic_typec` 系列模块，4.1 只改 DTB：
 > **内核 Image 与 DTB 都变了，`boot.img` 必须重新打包**。
@@ -124,7 +132,8 @@ cp fbcon-scrollback.patch polaris-sta-destroy-nowarn.patch \
    polaris-usb-typec.patch polaris-usb-pd.patch \
    ~/.local/var/pmbootstrap/cache_git/pmaports/device/community/linux-postmarketos-qcom-sdm845/
 #    APKBUILD: pkgrel 52 -> 53 追加 fbcon-scrollback.patch；53 -> 54 追加 polaris-sta-destroy-nowarn.patch；
-#              54 -> 61 追加 4 个 polaris-usb-*.patch（OTG / VBUS / TCPC / PD）
+#              54 -> 61 追加 4 个 polaris-usb-*.patch（OTG / VBUS / TCPC / PD）；
+#              61 -> 62 在 polaris-usb-pd.patch 里给 sink-pdos 追加 9V/2A（PD 快充）
 
 # 2. 重新算校验值并编译（有 ccache，增量只要 1 分钟左右）
 pmbootstrap checksum linux-postmarketos-qcom-sdm845
@@ -134,7 +143,7 @@ pmbootstrap build linux-postmarketos-qcom-sdm845 --force
 产物：
 
 ```
-~/.local/var/pmbootstrap/packages/v26.06/aarch64/linux-postmarketos-qcom-sdm845-7.1_rc1-r61.apk
+~/.local/var/pmbootstrap/packages/v26.06/aarch64/linux-postmarketos-qcom-sdm845-7.1_rc1-r62.apk
 └── boot/vmlinuz        ← 内核（zImage）
 └── boot/dtbs/qcom/sdm845-xiaomi-polaris.dtb   ← 含改动 1 / 4.1 / 4.2 / 4.4 的 DTS
 └── usr/lib/modules/7.1.0-rc1-sdm845/kernel/net/mac80211/mac80211.ko.zst  ← 改动 3 的产物
@@ -144,7 +153,7 @@ pmbootstrap build linux-postmarketos-qcom-sdm845 --force
 验证有没有编进去：
 
 ```bash
-uname -a    # 应显示 #62-postmarketos-qcom-sdm845（KBUILD_BUILD_VERSION = pkgrel+1）
+uname -a    # 应显示 #63-postmarketos-qcom-sdm845（KBUILD_BUILD_VERSION = pkgrel+1）
 ```
 
 ## 打包 boot.img

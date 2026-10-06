@@ -5,7 +5,7 @@ maintainer="Casey Connolly <kcxt@postmarketos.org>"
 _flavor="postmarketos-qcom-sdm845"
 pkgname=linux-$_flavor
 pkgver=7.1_rc1
-pkgrel=61
+pkgrel=62
 pkgdesc="Mainline Kernel fork for SDM845 devices"
 arch="aarch64"
 _carch="arm64"
@@ -116,5 +116,5 @@ ad10a7b370858d34da791d76e238937d716c3f55190281597bfd5905f67a230359c3bc1117a17089
 dcca54c8eb3ff6aecbd1bf5e7642d52b284d6276e90bff8307e371d6c77d31a1e858525163a34f15f2ab54f2ecd2df2cf0d834d9d27adeaeea954157141f7e54  polaris-usb-otg.patch
 5c939c7498d0f11d806b9a68219b383f78a6303e2d58803cffba8c88780ea0695107c685d417596e67aefe203d6bc0f6168a247d862aac6f687c73f2fb32f314  polaris-usb-vbus.patch
 dcfbfe7494b5c24706de6e58d0c8ea7a7fc644ce7ed6047e54070d8bbccb8e84c99d151c549e2a97e50206ccdbdffe4147ec71499e39f03f7a2be8f8eabecf04  polaris-usb-typec.patch
-65b80c03f4d86e3c28b49e89f176cf388c729c417718e5d953d3aa3000397a2a280a974b19add0189c8be10f6cef0ed92f8fc9a2a8d0d0b9b3e7f3a2ca4cca6e  polaris-usb-pd.patch
+70d23ffd54e5579a8105452c57b55782af893ae998e0f51b98bff646b3962308aeecaed7a1ae8cce8c2c19fc02905afdea958d77892128ba39f1155046db58fe  polaris-usb-pd.patch
 "

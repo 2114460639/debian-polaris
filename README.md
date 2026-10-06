@@ -8,10 +8,10 @@ Linux framebuffer 终端，屏幕底部常驻一个全尺寸虚拟键盘（fbkey
 设备适配（网络、音频、按键、ADB、固件）固化进镜像，开机即用，无需首启配置。
 
 - 发行版：Debian GNU/Linux 13.7 (trixie)，aarch64，约 381 个包
-- 内核：postmarketOS 的 `linux-postmarketos-qcom-sdm845` **7.1_rc1-r61**
-  （版本串 `7.1.0-rc1-sdm845`，`#62`），同一份内核与设备树；
+- 内核：postmarketOS 的 `linux-postmarketos-qcom-sdm845` **7.1_rc1-r62**
+  （版本串 `7.1.0-rc1-sdm845`，`#63`），同一份内核与设备树；
   在上游基础上打了 fbdev 背缓冲、fbcon 回滚、**WiFi 关机死锁**、**USB OTG / Type-C / PD**
-  四处补丁，见 [kernel/README.md](kernel/README.md)
+  四处补丁（PD 现支持 **9 V 快充**），见 [kernel/README.md](kernel/README.md)
 - 构建方式：**官方 Debian 源 + debootstrap**（非 Mobian），第三方预编译件仅为
   pmOS 内核/固件、静态 adbd、fbkeyboard 与 `polaris-keys`
 
@@ -31,7 +31,7 @@ Linux framebuffer 终端，屏幕底部常驻一个全尺寸虚拟键盘（fbkey
 | Audio 音频 | Y | ✅ DTS 音频节点 + ALSA UCM（Polaris-HiFi）一层，PulseAudio 开机接管；扬声器 / 麦克风、`pactl` 音量键调音均正常 |
 | Swap 内存交换 zram | Y | ✅ **本次新增**：开机自动建 **4 GiB / zstd** 压缩的 `/dev/zram0`（`polaris-zram-swap.service`，priority 100）；`vm.swappiness=180`、`vm.page-cluster=0`；`free -h` Swap 显示 4.0 GiB |
 | USB Net USB 网络 | Y | ✅ 设备侧固定 `172.16.42.1/24` + 内置 DHCP，插线电脑即得 `172.16.42.2`；由 systemd-networkd 管理，与 NetworkManager 不打架 |
-| USB OTG USB 主机 / Type-C PD | Y | ✅ **本次新增**：DWC3 由 `peripheral` 改为 `otg`（`usb-role-switch`），Type-C 连接器按 CC 自动判定角色 —— 插 U 盘 / 键鼠即可当 **USB 主机**；PMI8998 的 Type-C/PD 能力已补齐（VBUS 调节器 + TCPC + PD PHY），支持 **PD 边充边用 / 电源角色自动切换**，见 [kernel/README.md](kernel/README.md) 改动 4 |
+| USB OTG USB 主机 / Type-C PD | Y | ✅ **本次更新**：DWC3 由 `peripheral` 改为 `otg`（`usb-role-switch`），Type-C 连接器按 CC 自动判定角色 —— 插 U 盘 / 键鼠即可当 **USB 主机**；PMI8998 的 Type-C/PD 能力已补齐（VBUS 调节器 + TCPC + PD PHY），支持 **PD 边充边用 / 电源角色自动切换**；sink PDO 追加 **9 V / 2 A** 档，接 PD 充电器可协商到 9 V（实测 VBUS 8.69 V、输入约 10.1 W、电池约 8.5 W，比 5 V 档 +9% / +12%），见 [kernel/README.md](kernel/README.md) 改动 4 |
 | ADB 直连 | Y | ✅ 内置静态 adbd 开机自启；`adb shell` 直接得到 `root@polaris:~#` 并默认位于 `/root`，方向键 / Ctrl-C 行编辑正常 |
 | SSH | Y | ✅ 默认开启（`ssh user@172.16.42.1`）；主机密钥首启自动生成（自建 `polaris-ssh-keygen.service` 绕过 Debian `ConditionFirstBoot` 陷阱） |
 | Keyboard 虚拟键盘 | Y | ✅ fbkeyboard 常驻下半屏、uinput 注入；`Bcksp` 与方向键长按连发（0.4 s 后 / 每 80 ms）；隐藏格右上 / 右下发 `Shift+PgUp` / `Shift+PgDn` 回滚控制台日志 |
@@ -212,7 +212,7 @@ fastboot reboot               # 若卡住/失败，再执行 fastboot continue
     就按「历史行 + 实时内容」整屏重绘（按属性分段 `putcs`，与 `fbcon_redraw()` 同款）。
     新的控制台输出会自动落回实时画面，切 VT 也会归零；历史缓冲只在
     `fbcon_init`/`fbcon_resize` 这类可睡眠上下文里分配，滚动路径零分配。
-    内核版本 `7.1.0-rc1-sdm845 #62-postmarketos-qcom-sdm845`（pkgrel 61）。
+    内核版本 `7.1.0-rc1-sdm845 #63-postmarketos-qcom-sdm845`（pkgrel 62）。
   - 另外还有 `Esc / Tab / F10` 与 `Shift / Ctrl / Alt` 等功能键行。
   - **长按连发**：`Bcksp` 与四个方向键（`↑ ↓ ← →`）按住不放会持续生效——按住约 0.4 秒
     后开始连发（约每 80 毫秒一次），松手即停；其余按键仍是抬手触发一次。
@@ -330,8 +330,8 @@ fastboot reboot               # 若卡住/失败，再执行 fastboot continue
 
 | 镜像 | 刷入分区 | 内容 | 大小 |
 | --- | --- | --- | --- |
-| `boot.img` | `boot` | 内核 `7.1.0-rc1-sdm845`（#62，含 fbcon 回滚、USB OTG/Type-C/PD 补丁；WiFi 死锁补丁只改模块）+ 追加 DTB + initramfs | 25,825,280 B |
-| `xiaomi-polaris.img` | `userdata` | Debian 根文件系统（ext4, 4096 字节块，**首启自动扩容到整块 userdata**），**Android sparse 格式**；含 r61 内核的 USB/PD 模块（`qcom_pmic_tcpm.ko.zst`、`qcom_usb_vbus-regulator.ko.zst`） | 1,682,727,216 B (≈1.57 GiB，声明覆盖 550502 个 4K 块 ≈ 2.1 GiB) |
+| `boot.img` | `boot` | 内核 `7.1.0-rc1-sdm845`（#63，含 fbcon 回滚、USB OTG/Type-C/PD 补丁；WiFi 死锁补丁只改模块）+ 追加 DTB + initramfs | 25,825,280 B |
+| `xiaomi-polaris.img` | `userdata` | Debian 根文件系统（ext4, 4096 字节块，**首启自动扩容到整块 userdata**），**Android sparse 格式**；含 r62 内核的 USB/PD 模块（`qcom_pmic_tcpm.ko.zst`、`qcom_usb_vbus-regulator.ko.zst`） | 1,682,727,216 B (≈1.57 GiB，声明覆盖 550502 个 4K 块 ≈ 2.1 GiB) |
 
 > 同一份根文件系统的 raw ext4 版（2.1 GiB）为
 > `/home/wxs/debian-polaris/out/xiaomi-polaris-2g.img`；分区全尺寸稀疏版为
@@ -360,7 +360,7 @@ fastboot reboot               # 若卡住/失败，再执行 fastboot continue
 | 项目 | pmOS 控制台版 | 本 Debian 控制台版 |
 | --- | --- | --- |
 | 发行版 | postmarketOS / Alpine | **Debian 13 (trixie)**，apt 软件源 |
-| 内核/设备树 | pmOS 自建 | **复用同一份** pmOS `7.1_rc1-r61` 内核与 DTB（另打 USB OTG/PD 等补丁） |
+| 内核/设备树 | pmOS 自建 | **复用同一份** pmOS `7.1_rc1-r62` 内核与 DTB（另打 USB OTG/PD 等补丁） |
 | 显示启动 | 有 plymouth | **无 plymouth**（直接 fb 控制台） |
 | 大字体 | fbkeyboard drop-in + 字体复查服务 | **console-setup 原生** Terminus 16x32（+ drop-in 保险） |
 | initramfs | pmOS initramfs（自动创建 g1 gadget） | Debian initramfs-tools + **自建 `polaris-usb-gadget.service`** |
@@ -387,5 +387,5 @@ cd images
 md5sum -c boot.img.md5 xiaomi-polaris.img.md5
 ```
 
-预期结果：`boot.img` = `9084e022…`、`xiaomi-polaris.img` = `b91b7969…`
+预期结果：`boot.img` = `95713e42…`、`xiaomi-polaris.img` = `b91b7969…`
 （对应 raw 版 `b82b1851…`，可在 `/home/wxs/debian-polaris/out/xiaomi-polaris-2g.img` 下比对）。
