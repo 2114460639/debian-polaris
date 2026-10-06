@@ -8,7 +8,7 @@ Linux framebuffer 终端，屏幕底部常驻一个全尺寸虚拟键盘（fbkey
 设备适配（网络、音频、按键、ADB、固件）固化进镜像，开机即用，无需首启配置。
 
 - 发行版：Debian GNU/Linux 13.7 (trixie)，aarch64，约 381 个包
-- 内核：postmarketOS 的 `linux-postmarketos-qcom-sdm845` **7.1_rc1-r62**
+- 内核：postmarketOS 的 `linux-postmarketos-qcom-sdm845` **7.1\_rc1-r62**
   （版本串 `7.1.0-rc1-sdm845`，`#63`），同一份内核与设备树；
   在上游基础上打了 fbdev 背缓冲、fbcon 回滚、**WiFi 关机死锁**、**USB OTG / Type-C / PD**
   四处补丁（PD 现支持 **9 V 快充**），见 [kernel/README.md](kernel/README.md)
@@ -21,24 +21,23 @@ Linux framebuffer 终端，屏幕底部常驻一个全尺寸虚拟键盘（fbkey
 
 图例：**Y** = 正常可用，**P** = 部分可用，**N** = 不可用。标「本次」的是本轮镜像更新新增/改动的能力。
 
-| 功能 | 状态 | 注释 |
-| -------------- | :--: | ---------------------------------------------------------------------------------- |
-| Screen 屏幕 / Touch 触控 | P | ✅ 开机直入 fbcon 控制台，Terminus **16x32** 大字（console-setup 原生机制，非 pmOS 那套 drop-in）；触摸只用于屏幕下半部的 fbkeyboard 虚拟键盘，无图形手势 |
-| 3D GPU | Y | ✅ 本次内置 `libvulkan1` + `mesa-vulkan-drivers`（turnip / freedreno ICD），`fastfetch` 直接显示 `GPU: Qualcomm Turnip Adreno (TM) 630 [Integrated]`；`a630_zap.mbn` 固件单拷贝 + DT 派生路径相对软链，dmesg 0 错 |
-| Wifi Wi‑Fi | Y | ✅ WCN3990 固件按内核标准路径放置；`ath10k_snoc` 经 QMI WLFW 绑定，5GHz 满速 AC 866.7 Mbps；`iperf3` 上行 / 下行 ≈686 Mbps、0 重传 |
-| Bluetooth 蓝牙 | Y | ✅ WCN3990 固件（`crbtfw21.tlv` + 设备专属 `qca/polaris/crnv21.bin`）下载完成后控制器正常启动：`hciconfig -a` 为 **UP RUNNING**、`bluetoothctl scan on` 可发现周边设备；MAC 由 bootmac 固定；并已内置 `pulseaudio-module-bluetooth`，蓝牙耳机 / 音箱（A2DP）可用 |
-| Modem 移动数据 4G | Y | ✅ 插卡即用：`polaris-modem-uim` 先建 UIM primary GW 会话，ModemManager 达 `registered`；与 Wi‑Fi 并存时**优先 Wi‑Fi**（route-metric 600 vs 20000），Wi‑Fi 断开 4G 自动接管 |
-| Audio 音频 | Y | ✅ DTS 音频节点 + ALSA UCM（Polaris-HiFi）一层，PulseAudio 开机接管；扬声器 / 麦克风、`pactl` 音量键调音均正常 |
-| Swap 内存交换 zram | Y | ✅ **本次新增**：开机自动建 **4 GiB / zstd** 压缩的 `/dev/zram0`（`polaris-zram-swap.service`，priority 100）；`vm.swappiness=180`、`vm.page-cluster=0`；`free -h` Swap 显示 4.0 GiB |
-| USB Net USB 网络 | Y | ✅ 设备侧固定 `172.16.42.1/24` + 内置 DHCP，插线电脑即得 `172.16.42.2`；由 systemd-networkd 管理，与 NetworkManager 不打架 |
-| USB OTG USB 主机 / Type-C PD | Y | ✅ **本次更新**：DWC3 由 `peripheral` 改为 `otg`（`usb-role-switch`），Type-C 连接器按 CC 自动判定角色 —— 插 U 盘 / 键鼠即可当 **USB 主机**；PMI8998 的 Type-C/PD 能力已补齐（VBUS 调节器 + TCPC + PD PHY），支持 **PD 边充边用 / 电源角色自动切换**；sink PDO 追加 **9 V / 2 A** 档，接 PD 充电器可协商到 9 V（实测 VBUS 8.69 V、输入约 10.1 W、电池约 8.5 W，比 5 V 档 +9% / +12%），见 [kernel/README.md](kernel/README.md) 改动 4 |
-| ADB 直连 | Y | ✅ 内置静态 adbd 开机自启；`adb shell` 直接得到 `root@polaris:~#` 并默认位于 `/root`，方向键 / Ctrl-C 行编辑正常 |
-| SSH | Y | ✅ 默认开启（`ssh user@172.16.42.1`）；主机密钥首启自动生成（自建 `polaris-ssh-keygen.service` 绕过 Debian `ConditionFirstBoot` 陷阱） |
-| Keyboard 虚拟键盘 | Y | ✅ fbkeyboard 常驻下半屏、uinput 注入；`Bcksp` 与方向键长按连发（0.4 s 后 / 每 80 ms）；隐藏格右上 / 右下发 `Shift+PgUp` / `Shift+PgDn` 回滚控制台日志 |
-| Keys 电源 / 音量键 | Y | ✅ 电源键循环亮度 40% → 80% → 熄屏；音量键短按注入 `↑` / `↓`、长按调 PulseAudio 音量 |
-| Polkit 普通用户免密管理网络 | Y | ✅ **本次新增**：`/etc/polkit-1/rules.d/49-polaris-network.rules` 把 `org.freedesktop.NetworkManager.*` 全部动作授予 `netdev` / `sudo` 组，`user` 免 sudo 即可 `nmtui` / `nmcli` |
-| Suspend 挂起 / 休眠 | N | ⛔ 已整体禁用（`IdleAction=ignore` + mask `sleep.target` 等）；空闲 10 分钟仅按 `consoleblank=600` 熄屏，不改系统状态 |
-| Camera 摄像头 | N | ⛔ 本版本刻意为之：内核与设备树层面已移除，不可用 |
+| 功能                         |  状态 | 注释                                                                                                                                                                                                                                                                                                                                 |
+| -------------------------- | :-: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Screen 屏幕 / Touch 触控       |  P  | ✅ 开机直入 fbcon 控制台，Terminus **16x32** 大字（console-setup 原生机制，非 pmOS 那套 drop-in）；触摸只用于屏幕下半部的 fbkeyboard 虚拟键盘，无图形手势                                                                                                                                                                                                                     |
+| 3D GPU                     |  Y  | ✅ 内置 `libvulkan1` + `mesa-vulkan-drivers`（turnip / freedreno ICD），`fastfetch` 直接显示 `GPU: Qualcomm Turnip Adreno (TM) 630 [Integrated]`；`a630_zap.mbn` 固件单拷贝 + DT 派生路径相对软链，dmesg 0 错                                                                                                                                                |
+| Wifi Wi‑Fi                 |  Y  | ✅ WCN3990 固件按内核标准路径放置；`ath10k_snoc` 经 QMI WLFW 绑定，5GHz 满速 AC 866.7 Mbps；`iperf3` 上行 / 下行 ≈686 Mbps、0 重传                                                                                                                                                                                                                            |
+| Bluetooth 蓝牙               |  Y  | ✅ WCN3990 固件（`crbtfw21.tlv` + 设备专属 `qca/polaris/crnv21.bin`）下载完成后控制器正常启动：`hciconfig -a` 为 **UP RUNNING**、`bluetoothctl scan on` 可发现周边设备；MAC 由 bootmac 固定；并已内置 `pulseaudio-module-bluetooth`，蓝牙耳机 / 音箱（A2DP）可用                                                                                                                      |
+| Modem 移动数据 4G              |  Y  | ✅ 插卡即用：`polaris-modem-uim` 先建 UIM primary GW 会话，ModemManager 达 `registered`；与 Wi‑Fi 并存时**优先 Wi‑Fi**（route-metric 600 vs 20000），Wi‑Fi 断开 4G 自动接管                                                                                                                                                                                    |
+| Audio 音频                   |  Y  | ✅ DTS 音频节点 + ALSA UCM（Polaris-HiFi）一层，PulseAudio 开机接管；扬声器 / 麦克风、`pactl` 音量键调音均正常                                                                                                                                                                                                                                                   |
+| Swap 内存交换 zram             |  Y  | ✅ 开机自动建 **4 GiB / zstd** 压缩的 `/dev/zram0`（`polaris-zram-swap.service`，priority 100）；`vm.swappiness=180`、`vm.page-cluster=0`；`free -h` Swap 显示 4.0 GiB                                                                                                                                                                              |
+| USB Net USB 网络             |  Y  | ✅ 设备侧固定 `172.16.42.1/24` + 内置 DHCP，插线电脑即得 `172.16.42.2`；由 systemd-networkd 管理，与 NetworkManager 不打架                                                                                                                                                                                                                                 |
+| USB OTG USB 主机 / Type-C PD |  Y  | ✅ DWC3 由 `peripheral` 改为 `otg`（`usb-role-switch`），Type-C 连接器按 CC 自动判定角色 —— 插 U 盘 / 键鼠即可当 **USB 主机**；PMI8998 的 Type-C/PD 能力已补齐（VBUS 调节器 + TCPC + PD PHY），支持 **PD 边充边用 / 电源角色自动切换**；sink PDO 追加 **9 V / 2 A** 档，接 PD 充电器可协商到 9 V（实测 VBUS 8.69 V、输入约 10.1 W、电池约 8.5 W，比 5 V 档 +9% / +12%），见 [kernel/README.md](kernel/README.md) 改动 4 |
+| ADB 直连                     |  Y  | ✅ 内置静态 adbd 开机自启；`adb shell` 直接得到 `root@polaris:~#` 并默认位于 `/root`，方向键 / Ctrl-C 行编辑正常                                                                                                                                                                                                                                               |
+| Keyboard 虚拟键盘              |  Y  | ✅ fbkeyboard 常驻下半屏、uinput 注入；`Bcksp` 与方向键长按连发（0.4 s 后 / 每 80 ms）；隐藏格右上 / 右下发 `Shift+PgUp` / `Shift+PgDn` 回滚控制台日志                                                                                                                                                                                                                   |
+| Keys 电源 / 音量键              |  Y  | ✅ 电源键循环亮度 40% → 80% → 熄屏；音量键短按注入 `↑` / `↓`、长按调 PulseAudio 音量                                                                                                                                                                                                                                                                       |
+| Polkit 普通用户免密管理网络          |  Y  | ✅ `/etc/polkit-1/rules.d/49-polaris-network.rules` 把 `org.freedesktop.NetworkManager.*` 全部动作授予 `netdev` / `sudo` 组，`user` 免 sudo 即可 `nmtui` / `nmcli`                                                                                                                                                                              |
+| Suspend 挂起 / 休眠            |  N  | ⛔ 已整体禁用（`IdleAction=ignore` + mask `sleep.target` 等）；空闲 10 分钟仅按 `consoleblank=600` 熄屏，不改系统状态                                                                                                                                                                                                                                       |
+| Camera 摄像头                 |  N  | ⛔ 本版本刻意为之：内核与设备树层面已移除，不可用                                                                                                                                                                                                                                                                                                          |
 
 ## 目录结构
 
@@ -87,10 +86,10 @@ debian-polaris/
 仓库里**只放方法**（脚本、文档、补丁、配置），镜像和第三方二进制统一发在
 [Release v1.0](https://github.com/2114460639/debian-polaris/releases/tag/v1.0)：
 
-| 资产 | 大小 | 说明 |
-| --- | --- | --- |
-| `debian-polaris-flash-console.7z` | 403 MiB | **完整刷机包**（内容合计约 1.63 GiB，7z LZMA2 压到约 24%）|
-| `debian-polaris-flash-console.7z.sha256` | 98 B | 校验值 |
+| 资产                                       | 大小        | 说明                                         |
+| ---------------------------------------- | --------- | ------------------------------------------ |
+| `debian-polaris-flash-console.7z`        | 400 + MiB | **完整刷机包**（内容合计约 1.63 GiB，7z LZMA2 压到约 24%） |
+| `debian-polaris-flash-console.7z.sha256` | 98 B      | 校验值                                        |
 
 7z 里包含全部刷机所需：
 
@@ -133,7 +132,7 @@ cd debian-polaris-flash-console && ./flash.sh     # 输入 yes
    → 用 `fastboot reboot` 引导系统（失败自动退回 `fastboot continue`）。`erase` 是必须的
    （原因见下方「手动刷机」的说明），只要约 6 秒。**引导阶段可能较慢**：设备要把刚刷入的
    数据落盘到 UFS，可能持续几分钟。**首次开机**会自动把根文件系统扩容到整块 `userdata`
-   （并生成 SSH 主机密钥），约 1~2 分钟。
+   （并生成 SSH 主机密钥），约 1\~2 分钟。
 
 ### Windows 驱动安装（仅首次）
 
@@ -158,7 +157,7 @@ fastboot flash userdata images/xiaomi-polaris.img
 fastboot reboot               # 若卡住/失败，再执行 fastboot continue
 ```
 
-> **刷 userdata 之前必须先 `fastboot erase userdata`。**
+> **刷 userdata 之前必须先** **`fastboot erase userdata`。**
 > 本机 bootloader **从不写入全零数据**：FILL chunk 整个跳过，连 RAW chunk 里的全零块也
 > 一样跳过（用 `cmp` 比对刷写前后的设备数据验证过，与 chunk 大小、类型都无关）。
 > erase 走 discard、只要约 6 秒，清完之后被 bootloader 跳过的零区本来就是零，文件系统
@@ -167,7 +166,7 @@ fastboot reboot               # 若卡住/失败，再执行 fastboot continue
 > `ext2fs_check_desc: Corrupt group descriptor: bad block for block bitmap`
 > 并强制约 3.5 分钟的全盘检查。
 >
-> **`images/xiaomi-polaris.img` 名字叫 `.img`，内容其实是 Android sparse 镜像**
+> **`images/xiaomi-polaris.img`** **名字叫** **`.img`，内容其实是 Android sparse 镜像**
 > （按官方 postmarketOS 刷机包格式预先做好：只有 RAW/FILL chunk、没有 don't-care）。
 > fastboot 会原样发给 bootloader 原生解析，可正常启动。别拿它当 raw 镜像去 loop 挂载 /
 > e2fsck；需要 raw 镜像（loop 挂载、e2fsck 检查）时去编译产物目录取
@@ -179,13 +178,13 @@ fastboot reboot               # 若卡住/失败，再执行 fastboot continue
 > `boot.img` 的 cmdline 带 `fsck.repair=yes`：轻微不一致会自动 `fsck -y` 修复后继续
 > 启动。
 >
-> **刷完后用 `fastboot reboot` 引导系统**（脚本里也用 `timeout 60` 兜底，超时或失败则
+> **刷完后用** **`fastboot reboot`** **引导系统**（脚本里也用 `timeout 60` 兜底，超时或失败则
 > 自动退回 `fastboot continue`）。本机 bootloader 偶发「接受了 `fastboot reboot` 命令、
 > 复位后却**回落进 fastboot、进不了系统**」的情况，宿主侧 fastboot 进程也可能一直卡住
 > 不返回（实测 15 分钟仍不返回），所以脚本对 `reboot` 加了 60 秒超时；`fastboot continue`
 > 则是让 ABL 直接引导刚刷入的镜像，作为兜底。引导阶段设备要把刚刷入的数据落盘到 UFS，
 > **可能持续几分钟**（刷机传输被背压时更明显），屏幕可能先黑后亮，属正常现象。若手机仍停在
-> fastboot，**长按电源键 12~15 秒**物理复位即可（数据已经写完了，不会丢）。
+> fastboot，**长按电源键 12\~15 秒**物理复位即可（数据已经写完了，不会丢）。
 
 ## 系统功能介绍
 
@@ -320,7 +319,7 @@ fastboot reboot               # 若卡住/失败，再执行 fastboot continue
   `vm.min_free_kbytes=100000`。
   验证：`zramctl`、`cat /proc/swaps`、`free -h`（Swap 一栏显示 4.0 GiB）。
 - **常用工具**：`nano`、`less`、`iw`、`rfkill`、`e2fsprogs`、`usbutils`、`iproute2`、
-  `alsa-utils`、`python3` 等；**已预装 `fastfetch`、`iperf3`**，并内置让 `fastfetch`
+  `alsa-utils`、`python3` 等；**已预装** **`fastfetch`、`iperf3`**，并内置让 `fastfetch`
   显示完整 GPU 名称所需的 `libvulkan1` + `mesa-vulkan-drivers`（turnip / freedreno ICD），
   开机后 `fastfetch` 即可看到 `GPU: Qualcomm Turnip Adreno (TM) 630 [Integrated]`，
   `iperf3` 直接可做网络吞吐测试。固件约 79M、内核模块约 22M。系统用官方 Debian 源，
@@ -328,9 +327,9 @@ fastboot reboot               # 若卡住/失败，再执行 fastboot continue
 
 ## 分区与文件系统
 
-| 镜像 | 刷入分区 | 内容 | 大小 |
-| --- | --- | --- | --- |
-| `boot.img` | `boot` | 内核 `7.1.0-rc1-sdm845`（#63，含 fbcon 回滚、USB OTG/Type-C/PD 补丁；WiFi 死锁补丁只改模块）+ 追加 DTB + initramfs | 25,825,280 B |
+| 镜像                   | 刷入分区       | 内容                                                                                                                                                      | 大小                                                       |
+| -------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `boot.img`           | `boot`     | 内核 `7.1.0-rc1-sdm845`（#63，含 fbcon 回滚、USB OTG/Type-C/PD 补丁；WiFi 死锁补丁只改模块）+ 追加 DTB + initramfs                                                            | 25,825,280 B                                             |
 | `xiaomi-polaris.img` | `userdata` | Debian 根文件系统（ext4, 4096 字节块，**首启自动扩容到整块 userdata**），**Android sparse 格式**；含 r62 内核的 USB/PD 模块（`qcom_pmic_tcpm.ko.zst`、`qcom_usb_vbus-regulator.ko.zst`） | 1,682,727,216 B (≈1.57 GiB，声明覆盖 550502 个 4K 块 ≈ 2.1 GiB) |
 
 > 同一份根文件系统的 raw ext4 版（2.1 GiB）为
@@ -345,28 +344,15 @@ fastboot reboot               # 若卡住/失败，再执行 fastboot continue
   停在 `(initramfs)` 紧急 shell。若文件系统本来就是干净的，这一步是无操作，不影响正常启动。
 - **小镜像 + 首启自动扩容**：镜像里的根文件系统只做到 **2.1 GiB**（550502 个 4K 块，
   约 0.80 GiB 空闲），`/etc/fstab` 里带 `x-systemd.growfs`。这样刷机时 bootloader 需要
-  写入的**声明覆盖面积小**（fastboot 用 total_blks 而不是文件大小估算刷写量，覆盖越小刷得越快）；
+  写入的**声明覆盖面积小**（fastboot 用 total\_blks 而不是文件大小估算刷写量，覆盖越小刷得越快）；
   设备首次开机时由 systemd 的 `systemd-growfs-root.service` 依据该选项把根文件系统
-  **自动扩到整块 `userdata`（53.5 GiB）**。
-  > 下限说明：本 fs 用 flex_bg（每 16 个 group 一组），第二个 flex 组的 inode 表被固定在
+  **自动扩到整块** **`userdata`（53.5 GiB）**。
+  > 下限说明：本 fs 用 flex\_bg（每 16 个 group 一组），第二个 flex 组的 inode 表被固定在
   > 第 524288 块，`resize2fs` 因此最小只能缩到约 536437 块（2.05 GiB），再小会报
   > `New size smaller than minimum`。
   > 若个别情况下首启未自动扩容，手动执行 `sudo resize2fs /dev/sda21` 即可（瞬时完成）。
 - initramfs 由 Debian `initramfs-tools` 生成（`MODULES=list`：ext4/ufs/显示等驱动已编入内核，
   故无需带模块），约 10.7 MB，内含自建的 `polaris-usb-gadget` 所需组件。
-
-## 与 pmOS 控制台版（`pmos-polaris-flash-console`）的差异
-
-| 项目 | pmOS 控制台版 | 本 Debian 控制台版 |
-| --- | --- | --- |
-| 发行版 | postmarketOS / Alpine | **Debian 13 (trixie)**，apt 软件源 |
-| 内核/设备树 | pmOS 自建 | **复用同一份** pmOS `7.1_rc1-r62` 内核与 DTB（另打 USB OTG/PD 等补丁） |
-| 显示启动 | 有 plymouth | **无 plymouth**（直接 fb 控制台） |
-| 大字体 | fbkeyboard drop-in + 字体复查服务 | **console-setup 原生** Terminus 16x32（+ drop-in 保险） |
-| initramfs | pmOS initramfs（自动创建 g1 gadget） | Debian initramfs-tools + **自建 `polaris-usb-gadget.service`** |
-| 中文字体 | 无（英文控制台） | 无（英文控制台） |
-| 摄像头 | 内核已移除 | 内核已移除 |
-| 首启扩容 | pmOS 首启脚本 | **`x-systemd.growfs` 自动扩容**（首启扩到整块 userdata） |
 
 功能对齐（均可用）：fbkeyboard 虚拟键盘、大字体、电源键亮度循环、音量键方向键/音量、
 USB 网络 172.16.42.1、**USB 主机 / Type-C PD 边充边用**、ADB 直连、免密 sudo、
