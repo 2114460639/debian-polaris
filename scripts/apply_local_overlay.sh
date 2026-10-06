@@ -36,13 +36,19 @@ n=0
 find "$SRC" -type f | while read -r f; do
 	rel=${f#"$SRC"}
 	d=$(dirname "$rel")
-	# 目标目录逐级创建（已存在时 debugfs 返回错误，忽略）
+	# 目标目录逐级创建：必须先 stat 判断存在性，只对缺失的目录调 mkdir。
+	# debugfs 的 mkdir 对「已存在」的目录会先分配 inode、再报错且不回滚，
+	# 会在父目录里留下一个名字损坏的空壳目录，其数据块还可能与其他文件
+	# 撞在同一块上 —— e2fsck 会报 "directory corrupted" 与
+	# "multiply-claimed block(s)"，镜像直接不可用。
 	cur=""
 	old_ifs=$IFS
 	IFS=/
 	for part in ${d#/}; do
 		cur="$cur/$part"
-		"$DEBUGFS" -w -R "mkdir $cur" "$IMG" >/dev/null 2>&1 || true
+		if ! "$DEBUGFS" -R "stat $cur" "$IMG" 2>/dev/null | grep -q '^Inode:'; then
+			"$DEBUGFS" -w -R "mkdir $cur" "$IMG" >/dev/null 2>&1
+		fi
 	done
 	IFS=$old_ifs
 	# 覆盖：先删再写（debugfs 的 write 遇到已存在文件会失败）

@@ -353,7 +353,7 @@ fastboot reboot               # 若卡住/失败，再执行 fastboot continue
 | 镜像                   | 刷入分区       | 内容                                                                                                                                                      | 大小                                                       |
 | -------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
 | `boot.img`           | `boot`     | 内核 `7.1.0-rc1-sdm845`（#63，含 fbcon 回滚、USB OTG/Type-C/PD 补丁；WiFi 死锁补丁只改模块）+ 追加 DTB + initramfs                                                            | 25,825,280 B                                             |
-| `xiaomi-polaris.img` | `userdata` | Debian 根文件系统（ext4, 4096 字节块，**首启自动扩容到整块 userdata**），**Android sparse 格式**；含 r62 内核的 USB/PD 模块（`qcom_pmic_tcpm.ko.zst`、`qcom_usb_vbus-regulator.ko.zst`） | 1,682,727,216 B (≈1.57 GiB，声明覆盖 550502 个 4K 块 ≈ 2.1 GiB) |
+| `xiaomi-polaris.img` | `userdata` | Debian 根文件系统（ext4, 4096 字节块，**首启自动扩容到整块 userdata**），**Android sparse 格式**；含 r62 内核的 USB/PD 模块（`qcom_pmic_tcpm.ko.zst`、`qcom_usb_vbus-regulator.ko.zst`） | 1,682,759,984 B (≈1.57 GiB，声明覆盖 550502 个 4K 块 ≈ 2.1 GiB) |
 
 > 同一份根文件系统的 raw ext4 版（2.1 GiB）为
 > `/home/wxs/debian-polaris/out/xiaomi-polaris-2g.img`；分区全尺寸稀疏版为
@@ -391,5 +391,5 @@ cd images
 md5sum -c boot.img.md5 xiaomi-polaris.img.md5
 ```
 
-预期结果：`boot.img` = `95713e42…`、`xiaomi-polaris.img` = `b91b7969…`
-（对应 raw 版 `b82b1851…`，可在 `/home/wxs/debian-polaris/out/xiaomi-polaris-2g.img` 下比对）。
+预期结果：`boot.img` = `95713e42…`、`xiaomi-polaris.img` = `b2ce20b7…`
+（对应 raw 版 `2a8b0440…`，可在 `/home/wxs/debian-polaris/out/xiaomi-polaris-2g.img` 下比对）。
